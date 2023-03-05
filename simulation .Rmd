@@ -1,0 +1,556 @@
+---
+title: "simulation"
+author: "Chaoqi Wu"
+date: "2023-02-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(MXM)
+library(rje)
+library(tidyverse)
+library(arules)
+library(caret)
+```
+
+# How to generate data
+
+```{r}
+# from continous to binary
+c_to_b <- function(z,n){
+  intercept <- rnorm(n)
+  b <- expit(intercept+z)
+  y <- rbinom(n,1,b)
+  return(y)
+}
+
+
+# from continous to ordinal
+c_to_o <- function(z,n,cate){
+  z <- z + rnorm(n)
+  y <- discretize(z, breaks = cate)
+  y <- factor(y,levels = levels(y),labels = c(1:cate))
+  return(y)
+}
+
+# from continous to multinominal
+c_to_multi <- function(z,n,class){
+  y <- c()
+  for (j in 1:n) {
+    prob <- c()
+    for (i in 1:class) {
+      intercept <- rnorm(1)
+      prob[i] <- expit(intercept+z[j])
+    }
+    x <- rmultinom(1,1,prob)
+    for (k in 1:class) {
+      if (x[,1][k]==1) {
+      y[j] <- k
+    }
+    }
+  }
+
+  return(y)
+}
+```
+
+# Test
+we have four type: continous, binary, ordinal, multinomial
+
+(1) continuous to continuous
+```{r}
+  z <- rnorm(1000)
+  x <- 2*z + rnorm(1000)
+  y <- -1.5*z - rnorm(1000)
+  dat_cc <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+test_cc <- testIndFisher(y, dat_cc, 3, 1, wei = NULL)
+
+
+
+test_ctoc <- function(n=1000,m=1000){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  x <- 2*z + rnorm(m)
+  y <- -1.5*z - rnorm(m)
+  dat_cc <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+test_cc <- testIndFisher(y, dat_cc, 3, 1, wei = NULL)
+if (abs(test_cc$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_ctoc()
+
+```
+
+(2) continuous to binary
+```{r}
+
+z <- rnorm(1000)
+x <- c_to_b(1.5*z,1000)
+y <- 2*z + rnorm(1000)
+dat_cb <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# continuous to binary(mixed)
+testIndMMReg(y, dat_cb, 3, 1, wei = NULL)
+testIndRQ(y, dat_cb, 3, 1, wei = NULL)
+
+# binary to continuous(mixed)
+testIndLogistic(x, dat_cb, 2, 1, wei = NULL)
+testIndQBinom(x, dat_cb, 2, 1, wei = NULL)
+
+
+
+test_btoc <- function(n=1000,m=1000,test = "logistic"){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  x <- c_to_b(1.5*z,1000)
+  y <- 2*z + rnorm(1000)
+  dat_cb <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  if (test == "logistic") {
+    test_cb <- testIndLogistic(x, dat_cb, 2, 1, wei = NULL)
+  }else if(test == "binom"){
+    test_cb <- testIndQBinom(x, dat_cb, 2, 1, wei = NULL)
+  }
+if (abs(test_cb$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_btoc()
+test_btoc(test = "binom")
+
+```
+
+(3) continuous to ordinal
+```{r}
+z <- rnorm(1000)
+x <- c_to_o(1.5*z,1000,3)
+y <- 2*z + rnorm(1000)
+dat_co <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# continuous to ordinal(mixed)
+testIndMMReg(y, dat_co, 3, 1, wei = NULL)
+testIndRQ(y, dat_co, 3, 1, wei = NULL)
+
+# ordinal to continuous(mixed)
+testIndOrdinal(x, dat_cb, 2, 1, wei = NULL)
+
+
+test_otoc <- function(n=1000,m=1000,olevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  x <- c_to_o(1.5*z,m,olevel)
+  y <- -1.5*z - rnorm(m)
+  dat_co <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+test_co <- testIndOrdinal(x, dat_co, 2, 1, wei = NULL)
+if (abs(test_co$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_otoc()
+
+```
+
+(4) continuous to multinomial
+```{r}
+z <- rnorm(1000)
+x <- c_to_multi(z,1000,3)
+y <- 2*z + rnorm(1000)
+dat_cm <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# continuous to multinomial(mixed)
+testIndMMReg(y, dat_cm, 3, 1, wei = NULL)
+testIndRQ(y, dat_cm, 3, 1, wei = NULL)
+
+# multinomial to continuous(mixed)
+testIndMultinom(x, dat_cb, 2, 1, wei = NULL)
+
+test_mtoc <- function(n=1000,m=1000,mlevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  x <- c_to_multi(1.5*z,m,mlevel)
+  y <- -1.5*z - rnorm(m)
+  dat_cm <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+test_cm <- testIndMultinom(x, dat_cm, 2, 1, wei = NULL)
+if (abs(test_cm$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_mtoc()
+
+```
+
+
+(5) binary to binary
+```{r}
+z <- rnorm(1000)
+y <- c_to_b(1.5*z,1000)
+x <- c_to_b(-2*z,1000)
+
+dat_bb <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# binary to binary(mixed)
+testIndLogistic(x, dat_bb, 2, 1, wei = NULL)
+testIndQBinom(x, dat_bb, 2, 1, wei = NULL)
+
+testIndLogistic(y, dat_bb, 3, 1, wei = NULL)
+testIndQBinom(y, dat_bb, 3, 1, wei = NULL)
+
+
+test_btob <- function(n=1000,m=1000,test = "logistic"){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_b(1.5*z,m)
+  x <- c_to_b(-2*z,m)
+  dat_bb <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  if (test == "logistic") {
+    test_bb <- testIndLogistic(x, dat_bb, 2, 1, wei = NULL)
+  }else if(test == "binom"){
+    test_bb <- testIndQBinom(x, dat_bb, 2, 1, wei = NULL)
+  }
+if (abs(test_bb$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_btob()
+test_btob(test = "binom")
+
+
+
+```
+
+(6) binary to ordinal
+```{r}
+z <- rnorm(1000)
+y <- c_to_b(1.5*z,1000)
+x <- c_to_o(-2*z,1000,3)
+
+dat_bo <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# binary to ordinal(mixed)
+testIndLogistic(y, dat_bo, 3, 1, wei = NULL)
+testIndQBinom(y, dat_bo, 3, 1, wei = NULL)
+
+# ordinal to binary(mixed)
+testIndOrdinal(x, dat_bo, 2, 1, wei = NULL)
+
+test_btoo <- function(n=1000,m=1000,test = "logistic",olevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_b(1.5*z,m)
+  x <- c_to_o(-2*z,m,olevel)
+  dat_bo <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  if (test == "logistic") {
+    test_bo <- testIndLogistic(y, dat_bo, 3, 1, wei = NULL)
+  }else if(test == "binom"){
+    test_bo <- testIndQBinom(y, dat_bo, 3, 1, wei = NULL)
+  }
+if (abs(test_bo$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_btoo()
+test_btoo(test = "binom")
+
+
+test_otob <- function(n=1000,m=1000,olevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_b(1.5*z,m)
+  x <- c_to_o(-2*z,m,olevel)
+  dat_ob <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_ob <- testIndOrdinal(x, dat_ob, 2, 1, wei = NULL)
+
+if (abs(test_ob$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_otob()
+```
+
+(7) binary to multinomial
+```{r}
+z <- rnorm(1000)
+y <- c_to_b(1.5*z,1000)
+x <- c_to_multi(-2*z,1000,3)
+
+dat_bm <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# binary to multinomial(mixed)
+testIndLogistic(y, dat_bm, 3, 1, wei = NULL)
+testIndQBinom(y, dat_bm, 3, 1, wei = NULL)
+
+# multinomial to binary(mixed)
+testIndMultinom(x, dat_bm, 2, 1, wei = NULL)
+
+
+test_btom <- function(n=1000,m=1000,test = "logistic",mlevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_b(1.5*z,m)
+  x <- c_to_multi(-2*z,m,mlevel)
+  dat_bm <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  if (test == "logistic") {
+    test_bm <- testIndLogistic(y, dat_bm, 3, 1, wei = NULL)
+  }else if(test == "binom"){
+    test_bm <- testIndQBinom(y, dat_bm, 3, 1, wei = NULL)
+  }
+if (abs(test_bm$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_btom()
+test_btom(test = "binom")
+
+
+test_mtob <- function(n=1000,m=1000,mlevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_b(1.5*z,m)
+  x <- c_to_multi(-2*z,m,mlevel)
+  dat_mb <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_mb <- testIndMultinom(x, dat_bm, 2, 1, wei = NULL)
+
+if (abs(test_mb$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_mtob()
+
+
+
+
+
+```
+
+(8) ordinal to ordinal
+```{r}
+z <- rnorm(1000)
+y <- c_to_o(1.5*z,1000,3)
+x <- c_to_o(-2*z,1000,3)
+
+dat_oo <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+# ordinal to ordinal(mixed)
+testIndOrdinal(y, dat_oo, 3, 1, wei = NULL)
+
+# ordinal to ordinal(mixed)
+testIndOrdinal(x, dat_oo, 2, 1, wei = NULL)
+
+
+test_otoo <- function(n=1000,m=1000,olevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_o(1.5*z,m,olevel)
+  x <- c_to_o(-2*z,m,olevel)
+  dat_oo <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_oo <- testIndOrdinal(y, dat_oo, 3, 1, wei = NULL)
+
+if (abs(test_oo$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_otoo()
+
+
+```
+
+(9) ordinal to multinomial
+```{r}
+z <- rnorm(1000)
+y <- c_to_o(1.5*z,1000,3)
+x <- c_to_multi(-2*z,1000,3)
+
+dat_om <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+#ordinal to multinomial(mixed)
+testIndOrdinal(y, dat_om, 3, 1, wei = NULL)
+
+#multinomial to ordinal(mixed)
+testIndMultinom(x, dat_om, 2, 1, wei = NULL)
+
+test_otom <- function(n=1000,m=1000,olevel=3,mlevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_o(1.5*z,m,olevel)
+  x <- c_to_multi(-2*z,m,mlevel)
+  dat_om <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_om <- testIndOrdinal(y, dat_om, 3, 1, wei = NULL)
+
+if (abs(test_om$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_otom()
+
+test_mtoo <- function(n=1000,m=1000,olevel=3,mlevel=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_o(1.5*z,m,olevel)
+  x <- c_to_multi(-2*z,m,mlevel)
+  dat_mo <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_mo <- testIndMultinom(x, dat_om, 2, 1, wei = NULL)
+
+if (abs(test_mo$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_mtoo()
+
+
+
+```
+
+(10) multinomial to multinomial
+```{r}
+z <- rnorm(1000)
+y <- c_to_multi(1.5*z,1000,3)
+x <- c_to_multi(-2*z,1000,3)
+
+dat_mm <- tibble(
+  z=z,
+  y=y,
+  x=x
+)
+#ordinal to multinomial(mixed)
+testIndMultinom(y, dat_mm, 3, 1, wei = NULL)
+
+#multinomial to ordinal(mixed)
+testIndMultinom(x, dat_mm, 2, 1, wei = NULL)
+
+test_mtom <- function(n=1000,m=1000,mlevel=3,mlevel2=3){
+  count <- 0
+for (i in 1:n) {
+  z <- rnorm(m)
+  y <- c_to_multi(1.5*z,m,mlevel)
+  x <- c_to_multi(-2*z,m,mlevel2)
+  dat_mm <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+    test_mm <- testIndMultinom(y, dat_mm, 3, 1, wei = NULL)
+
+if (abs(test_mm$pvalue)<0.05) {
+  count <- count+1
+    }
+}
+  return(count/n)
+}
+test_mtom()
+
+
+
+```
+
