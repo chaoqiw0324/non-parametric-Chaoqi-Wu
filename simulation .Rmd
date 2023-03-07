@@ -83,7 +83,7 @@ for (i in 1:n) {
     x = x
   )
 test_cc <- testIndFisher(y, dat_cc, 3, 1, wei = NULL)
-if (abs(test_cc$pvalue)<0.05) {
+if (exp(test_cc$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -130,7 +130,7 @@ for (i in 1:n) {
   }else if(test == "binom"){
     test_cb <- testIndQBinom(x, dat_cb, 2, 1, wei = NULL)
   }
-if (abs(test_cb$pvalue)<0.05) {
+if (exp(test_cb$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -171,7 +171,7 @@ for (i in 1:n) {
     x = x
   )
 test_co <- testIndOrdinal(x, dat_co, 2, 1, wei = NULL)
-if (abs(test_co$pvalue)<0.05) {
+if (exp(test_co$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -210,7 +210,7 @@ for (i in 1:n) {
     x = x
   )
 test_cm <- testIndMultinom(x, dat_cm, 2, 1, wei = NULL)
-if (abs(test_cm$pvalue)<0.05) {
+if (exp(test_cm$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -256,7 +256,7 @@ for (i in 1:n) {
   }else if(test == "binom"){
     test_bb <- testIndQBinom(x, dat_bb, 2, 1, wei = NULL)
   }
-if (abs(test_bb$pvalue)<0.05) {
+if (exp(test_bb$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -303,7 +303,7 @@ for (i in 1:n) {
   }else if(test == "binom"){
     test_bo <- testIndQBinom(y, dat_bo, 3, 1, wei = NULL)
   }
-if (abs(test_bo$pvalue)<0.05) {
+if (exp(test_bo$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -326,7 +326,7 @@ for (i in 1:n) {
   )
     test_ob <- testIndOrdinal(x, dat_ob, 2, 1, wei = NULL)
 
-if (abs(test_ob$pvalue)<0.05) {
+if (exp(test_ob$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -370,7 +370,7 @@ for (i in 1:n) {
   }else if(test == "binom"){
     test_bm <- testIndQBinom(y, dat_bm, 3, 1, wei = NULL)
   }
-if (abs(test_bm$pvalue)<0.05) {
+if (exp(test_bm$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -393,7 +393,7 @@ for (i in 1:n) {
   )
     test_mb <- testIndMultinom(x, dat_bm, 2, 1, wei = NULL)
 
-if (abs(test_mb$pvalue)<0.05) {
+if (exp(test_mb$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -438,7 +438,7 @@ for (i in 1:n) {
   )
     test_oo <- testIndOrdinal(y, dat_oo, 3, 1, wei = NULL)
 
-if (abs(test_oo$pvalue)<0.05) {
+if (exp(test_oo$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -479,7 +479,7 @@ for (i in 1:n) {
   )
     test_om <- testIndOrdinal(y, dat_om, 3, 1, wei = NULL)
 
-if (abs(test_om$pvalue)<0.05) {
+if (exp(test_om$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -500,7 +500,7 @@ for (i in 1:n) {
   )
     test_mo <- testIndMultinom(x, dat_om, 2, 1, wei = NULL)
 
-if (abs(test_mo$pvalue)<0.05) {
+if (exp(test_mo$pvalue)<0.05) {
   count <- count+1
     }
 }
@@ -542,7 +542,7 @@ for (i in 1:n) {
   )
     test_mm <- testIndMultinom(y, dat_mm, 3, 1, wei = NULL)
 
-if (abs(test_mm$pvalue)<0.05) {
+if (exp(test_mm$pvalue)<0.05) {
   count <- count+1
     }
 }
