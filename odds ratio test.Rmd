@@ -1,0 +1,280 @@
+---
+title: "odds ratio test"
+author: "Daniel Malinsky and Chaoqi Wu"
+date: "2023-03-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(MXM)
+library(rje)
+library(tidyverse)
+library(arules)
+library(caret)
+library(BB)
+```
+
+# Simulate Data
+
+```{r}
+# from continous to binary
+c_to_b <- function(z,n){
+  intercept <- rnorm(n)
+  b <- expit(intercept+z)
+  y <- rbinom(n,1,b)
+  return(y)
+}
+
+
+# from continous to ordinal
+c_to_o <- function(z,n,cate){
+  z <- z + rnorm(n)
+  y <- discretize(z, breaks = cate)
+  y <- factor(y,levels = levels(y),labels = c(1:cate))
+  return(y)
+}
+
+# from continous to multinominal
+c_to_multi <- function(z,n,class){
+  y <- c()
+  for (j in 1:n) {
+    prob <- c()
+    for (i in 1:class) {
+      intercept <- rnorm(1)
+      prob[i] <- expit(intercept+z[j])
+    }
+    x <- rmultinom(1,1,prob)
+    for (k in 1:class) {
+      if (x[,1][k]==1) {
+      y[j] <- k
+    }
+    }
+  }
+
+  return(y)
+}
+```
+
+
+# Estimation 
+```{r}
+psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
+  ## Function: estimate the odds ratio parameter psi
+  ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
+  ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
+  ## Output: A real number (vector) psi.hat, an estimate of the conditional odds ratio parameter psi
+  
+  ## Todo: generalize estimating eq to arbitrary dimensions
+  
+  #temp
+  if(!exp.bin){
+    A[,1] <- A[,1] - mean(A[,1],na.rm=TRUE)
+    A[,2] <- A[,2] - mean(A[,2],na.rm=TRUE)
+    L[,1] <- L[,1] - mean(L[,1],na.rm=TRUE)
+    if(ncol(L) > 1) L[,2] <- L[,2] - mean(L[,2],na.rm=TRUE)
+  }
+  
+  if(length(L)==0){
+    L <- cbind(rep(0,length(Y)),rep(0,length(Y))) ## for cases where conditioning set is empty
+    colnames(L) <- c("L1","L2")
+  }
+  
+  if(!is.null(subset)) Y <- Y[subset]
+  if(!is.null(subset)) A <- A[subset,]
+  if(!is.null(subset)) L <- L[subset,]
+  #temp
+  
+  dat <- data.frame(Y,A,L)
+  
+  refA <- 0 
+  refY <- 0
+  
+  if(exp.scalar){
+  
+    if(out.bin && exp.bin){
+      h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
+    
+      outcome <- glm(Y ~ A + L, family = binomial)
+      dat1 <- data.frame(cbind(A,L))
+      dat1[,1] <- 0 ## setting A=0
+      onm <- predict.glm(outcome, newdata=dat1,type="response")
+      onm[Y==0] <- 1-onm[Y==0]
+    
+      exposure <- glm(A ~ Y + L, family = binomial)
+      dat2 <- data.frame(cbind(Y,L))
+      dat2[,1] <- 0 ## setting Y=0
+      enm <- predict.glm(exposure, newdata=dat2,type="response")
+      enm[A==0] <- 1-enm[A==0]
+    
+      d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
+    
+      U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
+      est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm, d.diff=d.diff)
+      return(est$root)
+    }
+  
+    if(!out.bin){ 
+      outcome <- glm(Y ~ A + L, family = gaussian)
+    } else outcome <- glm(Y ~ A + L, family = binomial)
+    dat1 <- data.frame(cbind(A,L))
+    dat1[,1] <- 0 ## setting A=0
+    onm <- predict.glm(outcome, newdata=dat1,type="response")
+    onm[Y==0] <- 1-onm[Y==0]
+  
+    if(!exp.bin){
+      exposure <- glm(A ~ Y + L, family = gaussian)
+    } else exposure <- glm(A ~ Y + L, family = binomial)
+    dat2 <- data.frame(cbind(Y,L))
+    dat2[,1] <- 0 ## setting Y=0
+    enm <- predict.glm(exposure, newdata=dat2,type="response")
+    enm[A==0] <- 1-enm[A==0]
+  
+  
+    #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+    #est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm)
+    #return(est$root)
+  
+    U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+    par.init <- c(1.0)
+    sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
+    est <- sol$par
+  
+    return(est)
+  } ## end if(exposure is scalar)
+  
+  if(!exp.scalar){
+    
+    d <- ncol(A)
+    exposure <- list()
+    enm <- list()
+    
+    # if(out.bin && exp.bin){
+    #   cat("error!") ## do this binary case later
+    # }
+    
+    fmla = as.formula(paste("Y ~", paste0(colnames(A),collapse="+"), "+", paste0(colnames(L),collapse="+")))
+    if(!out.bin){ 
+      outcome <- glm(fmla, dat, family = gaussian)
+    } else outcome <- glm(fmla, dat, family = binomial)  
+    dat1 <- dat[,-1] #data.frame(cbind(A,L))
+    for(j in 1:d){ dat1[,j] <- refA } ## setting A=0
+    onm <- predict.glm(outcome, newdata=dat1, type="response")
+    onm[Y==0] <- 1-onm[Y==0]
+    
+    if(!exp.bin){
+      for(j in 1:d){
+        fmla_a = as.formula(paste(colnames(A)[j], " ~ Y + ", paste0(colnames(L),collapse="+") ))
+        exposure[[j]] <- glm(fmla_a, dat, family = gaussian)
+      }
+    } else {
+      for(j in 1:d){
+        fmla_a = as.formula(paste(colnames(A)[j], " ~ Y + ", paste0(colnames(L),collapse="+") ))
+        exposure[[j]] <- glm(fmla_a, dat, family = binomial)
+      }
+    }
+    dat2 <- dat[,-c(2:(d+1))] #data.frame(cbind(as.numeric(Y),L))
+    colnames(dat2) = c("Y",colnames(L))
+    dat2[,1] <- refY ## setting Y=0
+    for(j in 1:d){
+      enm[[j]] <- predict.glm(exposure[[j]], newdata=dat, type="response")
+      enm[[j]][A[,j]==0] <- 1-enm[[j]][A[,j]==0]
+    }
+  
+    U <- function(psi){
+      f <- rep(NA,d)
+      for(j in 1:d){
+        f[j] <- sum( (Y - onm)*(A[,j] - enm[[j]])*exp( -psi[1]*Y*A[,1] -psi[2]*Y*A[,2] ) ) # need to generalize to arbitrary d!
+        #f[j] <- sum( (Y - onm)*(A[,j] - enm[[j]])*exp( ... ) ) ## psi1*Y*A1 + psi2*Y*A2 + ... psid*Y*Ad
+      }
+      f
+    }
+    
+    par.init <- outcome$coefficients[2:(d+1)]
+    sol <- BBsolve(par=par.init, fn=U, control=c(noimp=2000, maxit=5000), quiet=TRUE) 
+    est <- sol$par
+    
+    if(sol$convergence > 0) {
+      cat("ERROR: DR odds ratio estimator failed", "\n")
+      est <- par.init ## ad hoc fix in case method fails
+    }
+    
+    return(est)
+      
+  }
+  
+}
+```
+
+# Function test   
+
+(1) outcome: continous, exposure: binary
+```{r}
+z <- rnorm(1000)
+y <- 2*z + rnorm(1000)
+x <- c_to_b(-2*z,1000)
+
+psi.hat(y,x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+
+```
+
+```{r}
+z <- rnorm(1000)
+y <- 2*z + rnorm(1000)
+x1 <- c_to_b(-2*z,1000)
+x2 <- c_to_b(z,1000)
+x <- tibble(x1,x2)
+
+psi.hat(y,x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = FALSE)
+
+```
+
+(2) outcome: continous, exposure: continous
+```{r}
+z <- rnorm(1000)
+z <- as.matrix(tibble(z))
+
+y <- -1.5*z - rnorm(1000)
+y <-  as.matrix(tibble(y))
+x1 <- 2*z + rnorm(1000)
+x2 <- 3*z + -1.5 * rnorm(1000)
+x <- as.matrix(
+  tibble(
+    x1,x2
+    )
+  )
+
+psi.hat(y,x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = FALSE)
+debug(psi.hat)
+undebug(psi.hat)
+```
+
+(3) outcome: binary, exposure: continous
+```{r}
+z <- rnorm(1000)
+z <- as.matrix(tibble(z))
+y <- c_to_b(-2*z,1000)
+y <- as.matrix(tibble(y))
+x1 <- 2*z + rnorm(1000)
+x2 <- 3*z + -1.5 * rnorm(1000)
+x <- as.matrix(
+  tibble(
+    x1,x2
+    )
+  )
+
+psi.hat(y,x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE)
+
+
+debug(psi.hat)
+undebug(psi.hat)
+```
+
+(4)  outcome: binary, exposure: binary
+```{r}
+z <- rnorm(1000)
+y <- c_to_b(3*z,1000)
+x <- c_to_b(-2*z,1000)
+
+psi.hat(y,x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+
+```
