@@ -58,6 +58,85 @@ c_to_multi <- function(z,n,class){
 
 # Estimation 
 ```{r}
+# psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
+#   ## Function: estimate the odds ratio parameter psi
+#   ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
+#   ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
+#   ## Output: A real number (vector) psi.hat, an estimate of the conditional odds ratio parameter psi
+#   
+#   ## Todo: generalize estimating eq to arbitrary dimensions
+#   
+#   if(length(L)==0){
+#     L <- cbind(rep(0,length(Y)),rep(0,length(Y))) ## for cases where conditioning set is empty
+#     colnames(L) <- c("L1","L2")
+#   }
+#   
+#   
+#   if(!is.null(subset)) Y <- Y[subset]
+#   if(!is.null(subset)) A <- A[subset,]
+#   if(!is.null(subset)) L <- L[subset,]
+#   #temp
+#   
+#   refA <- 0 
+#   refY <- 0
+# 
+#     
+#     if(out.bin && exp.bin){
+#       h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
+#     
+#       if(length(L)==0) {outcome <- glm(Y~A,family=binomial)} else outcome <- glm(Y ~ A + L, family = binomial)
+#       dat1 <- data.frame(cbind(A,L))
+#       dat1[,1] <- 0 ## setting A=0
+#       onm <- predict.glm(outcome, newdata=dat1,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+#       onm[Y==0] <- 1-onm[Y==0]
+#     
+#       exposure <- glm(A ~ Y + L, family = binomial)
+#       dat2 <- data.frame(cbind(Y,L))
+#       dat2[,1] <- 0 ## setting Y=0
+#       enm <- predict.glm(exposure, newdata=dat2,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+#       enm[A==0] <- 1-enm[A==0]
+#     
+#       d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
+#     
+#       U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
+#       est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm, d.diff=d.diff)
+#       return(est$root)
+#     }
+#   
+#     if(!out.bin){ 
+#       outcome <- glm(Y ~ A + L, family = gaussian)
+#     } else outcome <- glm(Y ~ A + L, family = binomial)
+#     dat1 <- data.frame(cbind(A,L))
+#     dat1[,1] <- 0 ## setting A=0
+#     onm <- predict.glm(outcome, newdata=dat1,type="response")
+#     onm[Y==0] <- 1-onm[Y==0]
+#   
+#     if(!exp.bin){
+#       exposure <- glm(A ~ Y + L, family = gaussian)
+#     } else exposure <- glm(A ~ Y + L, family = binomial)
+#     dat2 <- data.frame(cbind(Y,L))
+#     dat2[,1] <- 0 ## setting Y=0
+#     enm <- predict.glm(exposure, newdata=dat2,type="response")
+#     enm[A==0] <- 1-enm[A==0]
+#   
+#   
+#     #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+#     #est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm)
+#     #return(est$root)
+#   
+#     U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+#     par.init <- c(1.0)
+#     sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
+#     est <- sol$par
+#   
+#     return(est)
+# 
+# 
+#   
+# }
+```
+
+```{r}
 psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
   ## Function: estimate the odds ratio parameter psi
   ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
@@ -66,44 +145,44 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
   
   ## Todo: generalize estimating eq to arbitrary dimensions
   
-  #temp
-  if(!exp.bin){
-    A[,1] <- A[,1] - mean(A[,1],na.rm=TRUE)
-    A[,2] <- A[,2] - mean(A[,2],na.rm=TRUE)
-    L[,1] <- L[,1] - mean(L[,1],na.rm=TRUE)
-    if(ncol(L) > 1) L[,2] <- L[,2] - mean(L[,2],na.rm=TRUE)
+  if(length(L)==0){
+    fm_out <- "Y ~ A"
+    fm_out <- as.formula(fm_out)
+    fm_exp <- "A ~ Y"
+    fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
+    dat <- data.frame(Y,A)
+  }else{
+    covnames <- colnames(L)
+    fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
+    fm_out <- as.formula(fm_out)
+    fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
+    fm_exp <- as.formula(fm_exp)
+    dat <- data.frame(Y,A,L)
   }
   
-  if(length(L)==0){
-    L <- cbind(rep(0,length(Y)),rep(0,length(Y))) ## for cases where conditioning set is empty
-    colnames(L) <- c("L1","L2")
-  }
   
   if(!is.null(subset)) Y <- Y[subset]
   if(!is.null(subset)) A <- A[subset,]
   if(!is.null(subset)) L <- L[subset,]
   #temp
   
-  dat <- data.frame(Y,A,L)
   
   refA <- 0 
   refY <- 0
-  
-  if(exp.scalar){
-  
+    
     if(out.bin && exp.bin){
       h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
-    
-      outcome <- glm(Y ~ A + L, family = binomial)
-      dat1 <- data.frame(cbind(A,L))
-      dat1[,1] <- 0 ## setting A=0
-      onm <- predict.glm(outcome, newdata=dat1,type="response")
+      dat1 <- dat
+      dat2 <- dat
+      
+      outcome <- glm(fm_out,family=binomial,data = dat)
+      dat1$A <- 0 ## setting A=0
+      onm <- predict.glm(outcome, newdata=dat1,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
       onm[Y==0] <- 1-onm[Y==0]
     
-      exposure <- glm(A ~ Y + L, family = binomial)
-      dat2 <- data.frame(cbind(Y,L))
-      dat2[,1] <- 0 ## setting Y=0
-      enm <- predict.glm(exposure, newdata=dat2,type="response")
+      exposure <- glm(fm_exp, family = binomial,data = dat)
+      dat2$Y <- 0 ## setting Y=0
+      enm <- predict.glm(exposure, newdata=dat2,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
       enm[A==0] <- 1-enm[A==0]
     
       d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
@@ -114,18 +193,18 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
     }
   
     if(!out.bin){ 
-      outcome <- glm(Y ~ A + L, family = gaussian)
-    } else outcome <- glm(Y ~ A + L, family = binomial)
-    dat1 <- data.frame(cbind(A,L))
-    dat1[,1] <- 0 ## setting A=0
+      outcome <- glm(fm_out, family = gaussian,data = dat)
+    } else outcome <- glm(fm_out, family = binomial,data = dat)
+    dat1 <- dat
+    dat1$A <- 0 ## setting A=0
     onm <- predict.glm(outcome, newdata=dat1,type="response")
     onm[Y==0] <- 1-onm[Y==0]
   
     if(!exp.bin){
-      exposure <- glm(A ~ Y + L, family = gaussian)
-    } else exposure <- glm(A ~ Y + L, family = binomial)
-    dat2 <- data.frame(cbind(Y,L))
-    dat2[,1] <- 0 ## setting Y=0
+      exposure <- glm(fm_exp, family = gaussian,data = dat)
+    } else exposure <- glm(fm_exp, family = binomial,data = dat)
+    dat2 <- dat
+    dat2$Y <- 0 ## setting Y=0
     enm <- predict.glm(exposure, newdata=dat2,type="response")
     enm[A==0] <- 1-enm[A==0]
   
@@ -140,141 +219,257 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
     est <- sol$par
   
     return(est)
-  } ## end if(exposure is scalar)
-  
-  if(!exp.scalar){
-    
-    d <- ncol(A)
-    exposure <- list()
-    enm <- list()
-    
-    # if(out.bin && exp.bin){
-    #   cat("error!") ## do this binary case later
-    # }
-    
-    fmla = as.formula(paste("Y ~", paste0(colnames(A),collapse="+"), "+", paste0(colnames(L),collapse="+")))
-    if(!out.bin){ 
-      outcome <- glm(fmla, dat, family = gaussian)
-    } else outcome <- glm(fmla, dat, family = binomial)  
-    dat1 <- dat[,-1] #data.frame(cbind(A,L))
-    for(j in 1:d){ dat1[,j] <- refA } ## setting A=0
-    onm <- predict.glm(outcome, newdata=dat1, type="response")
-    onm[Y==0] <- 1-onm[Y==0]
-    
-    if(!exp.bin){
-      for(j in 1:d){
-        fmla_a = as.formula(paste(colnames(A)[j], " ~ Y + ", paste0(colnames(L),collapse="+") ))
-        exposure[[j]] <- glm(fmla_a, dat, family = gaussian)
-      }
-    } else {
-      for(j in 1:d){
-        fmla_a = as.formula(paste(colnames(A)[j], " ~ Y + ", paste0(colnames(L),collapse="+") ))
-        exposure[[j]] <- glm(fmla_a, dat, family = binomial)
-      }
-    }
-    dat2 <- dat[,-c(2:(d+1))] #data.frame(cbind(as.numeric(Y),L))
-    colnames(dat2) = c("Y",colnames(L))
-    dat2[,1] <- refY ## setting Y=0
-    for(j in 1:d){
-      enm[[j]] <- predict.glm(exposure[[j]], newdata=dat, type="response")
-      enm[[j]][A[,j]==0] <- 1-enm[[j]][A[,j]==0]
-    }
-  
-    U <- function(psi){
-      f <- rep(NA,d)
-      for(j in 1:d){
-        f[j] <- sum( (Y - onm)*(A[,j] - enm[[j]])*exp( -psi[1]*Y*A[,1] -psi[2]*Y*A[,2] ) ) # need to generalize to arbitrary d!
-        #f[j] <- sum( (Y - onm)*(A[,j] - enm[[j]])*exp( ... ) ) ## psi1*Y*A1 + psi2*Y*A2 + ... psid*Y*Ad
-      }
-      f
-    }
-    
-    par.init <- outcome$coefficients[2:(d+1)]
-    sol <- BBsolve(par=par.init, fn=U, control=c(noimp=2000, maxit=5000), quiet=TRUE) 
-    est <- sol$par
-    
-    if(sol$convergence > 0) {
-      cat("ERROR: DR odds ratio estimator failed", "\n")
-      est <- par.init ## ad hoc fix in case method fails
-    }
-    
-    return(est)
-      
-  }
-  
+
 }
 ```
 
+
 # Function test   
 
-(1) outcome: continous, exposure: binary
+(1) outcome: continuous, exposure: binary
 ```{r}
-z <- rnorm(1000)
-y <- 2*z + rnorm(1000)
-x <- c_to_b(-2*z,1000)
+nsample <- 100
+nboots <- 1000
+result_cb <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- 2*z + rnorm(1000)
+  x <- c_to_b(-2*z,1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  }
+  result_cb[i,1] <- mean(result[,1])
+  result_cb[i,2] <- sd(result[,1])
+  result_cb[i,3] <- mean(result[,2])
+  result_cb[i,4] <- sd(result[,2])
+}
+res_cb <- as.data.frame(result_cb)
 
-psi.hat(y,x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+colnames(res_cb) <- c("mean","sd","mean_L","sd_L")
 
+res_cb <- res_cb %>% 
+  mutate(
+    ci_low     = mean - 1.96*sd,
+    ci_high    = mean + 1.96*sd,
+    ci_low_L   = mean_L - 1.96*sd_L,
+    ci_high_L  = mean_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+  
+
+knitr::kable(res_cb,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Confidence Interval(lower)","Confidence Interval(upper)","Confidence Interval(lower with L)","Confidence Interval(upper with L)","Number of CI contains 1","Number of CI contains 1(with L)"),
+             caption = "Result For Continuous Outcome to Binary Exposure"
+             )
 ```
 
-```{r}
-z <- rnorm(1000)
-y <- 2*z + rnorm(1000)
-x1 <- c_to_b(-2*z,1000)
-x2 <- c_to_b(z,1000)
-x <- tibble(x1,x2)
-
-psi.hat(y,x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = FALSE)
-
-```
 
 (2) outcome: continous, exposure: continous
 ```{r}
-z <- rnorm(1000)
-z <- as.matrix(tibble(z))
+# z <- rnorm(1000)
+# y <- -1.5*z - rnorm(1000)
+# x <- 2*z + rnorm(1000)
+# psi.hat(Y=y,A=x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+# z <- tibble(z=z)
+# psi.hat(y,x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
 
-y <- -1.5*z - rnorm(1000)
-y <-  as.matrix(tibble(y))
-x1 <- 2*z + rnorm(1000)
-x2 <- 3*z + -1.5 * rnorm(1000)
-x <- as.matrix(
-  tibble(
-    x1,x2
-    )
+
+nsample <- 100
+nboots <- 1000
+result_cc <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- 2*z + rnorm(1000)
+  x <- -1.5*z + 3*rnorm(1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
   )
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  }
+  result_cc[i,1] <- mean(result[,1])
+  result_cc[i,2] <- sd(result[,1])
+  result_cc[i,3] <- mean(result[,2])
+  result_cc[i,4] <- sd(result[,2])
+}
 
-psi.hat(y,x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = FALSE)
-debug(psi.hat)
-undebug(psi.hat)
+res_cc <- as.data.frame(result_cc)
+
+colnames(res_cc) <- c("mean","sd","mean_L","sd_L")
+res_cc <- res_cc %>% 
+  mutate(
+    ci_low     = mean - 1.96*sd,
+    ci_high    = mean + 1.96*sd,
+    ci_low_L   = mean_L - 1.96*sd_L,
+    ci_high_L  = mean_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+  
+
+knitr::kable(res_cc,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Confidence Interval(lower)","Confidence Interval(upper)","Confidence Interval(lower with L)","Confidence Interval(upper with L)","Number of CI contains 1","Number of CI contains 1(with L)"),
+             caption = "Result For Continuous Outcome to Continuous Exposure"
+             )
 ```
 
-(3) outcome: binary, exposure: continous
+(3) outcome: binary, exposure: continuous
 ```{r}
-z <- rnorm(1000)
-z <- as.matrix(tibble(z))
-y <- c_to_b(-2*z,1000)
-y <- as.matrix(tibble(y))
-x1 <- 2*z + rnorm(1000)
-x2 <- 3*z + -1.5 * rnorm(1000)
-x <- as.matrix(
-  tibble(
-    x1,x2
-    )
+# z <- rnorm(1000)
+# y <- c_to_b(-2*z,1000)
+# x <- 2*z + rnorm(1000)
+# psi.hat(y,x, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+# z <- as.matrix(tibble(z))
+# psi.hat(y,x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+
+nsample <- 100
+nboots <- 1000
+result_bc <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- c_to_b(-2*z,1000)
+  x <- 2*z + rnorm(1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
   )
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+  }
+  result_bc[i,1] <- mean(result[,1])
+  result_bc[i,2] <- sd(result[,1])
+  result_bc[i,3] <- mean(result[,2])
+  result_bc[i,4] <- sd(result[,2])
+}
 
-psi.hat(y,x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE)
+res_bc <- as.data.frame(result_bc)
 
+colnames(res_bc) <- c("mean","sd","mean_L","sd_L")
+res_bc <- res_bc %>% 
+  mutate(
+    ci_low     = mean - 1.96*sd,
+    ci_high    = mean + 1.96*sd,
+    ci_low_L   = mean_L - 1.96*sd_L,
+    ci_high_L  = mean_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+  
 
-debug(psi.hat)
-undebug(psi.hat)
+knitr::kable(res_bc,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Confidence Interval(lower)","Confidence Interval(upper)","Confidence Interval(lower with L)","Confidence Interval(upper with L)","Number of CI contains 1","Number of CI contains 1(with L)"),
+             caption = "Result For Binary Outcome to Continuous Exposure"
+             )
+
 ```
 
 (4)  outcome: binary, exposure: binary
 ```{r}
-z <- rnorm(1000)
-y <- c_to_b(3*z,1000)
-x <- c_to_b(-2*z,1000)
+nsample <- 100
+nboots <- 1000
+result_bb <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- c_to_b(3*z,1000)
+  x <- c_to_b(-2*z,1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+     #result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  }
+  result_bb[i,1] <- mean(result[,1])
+  result_bb[i,2] <- sd(result[,1])
+  result_bb[i,3] <- mean(result[,2])
+  result_bb[i,4] <- sd(result[,2])
+}
 
-psi.hat(y,x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+res_bb <- as.data.frame(result_bb[,1:2])
+
+colnames(res_bb) <- c("mean","sd")
+res_bb <- res_bb %>% 
+  mutate(
+    ci_low     = mean - 1.96*sd,
+    ci_high    = mean + 1.96*sd,
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+  ) %>% 
+  select(
+    ci_low,ci_high,contain
+  )
+  
+
+knitr::kable(res_bb,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Confidence Interval(lower)","Confidence Interval(upper)","Number of CI contains 1"),
+             caption = "Result For Binary Outcome to Binary Exposure"
+             )
+
 
 ```
