@@ -246,11 +246,74 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
 
 ```{r}
 n <- 1000
-nsample <- 1000
-nboots <- 1000
+nsample <- 10
+nboots <- 5
 ```
 
 ## (1) outcome: continuous, exposure: binary
+```{r}
+result_cb <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- 2*z + rnorm(1000)
+  x <- c_to_b(-2*z,1000)
+
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  # summary(glm(y~x+z,data=dat))
+  # summary(glm(y~x,data=dat))
+  z <- tibble(L = dat$z)
+  result_cb[i,1] <- exp(psi.hat(dat$y,dat$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+  result_cb[i,3] <- exp(psi.hat(dat$y,dat$x,z, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     set.seed(j)
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  }
+  result_cb[i,2] <-   sd(exp(result[,1]))
+  result_cb[i,4] <-   sd(exp(result[,2]))
+}
+res_cb <- as.data.frame(result_cb)
+
+colnames(res_cb) <- c("point","sd","point_L","sd_L")
+
+res_cb <- res_cb %>%
+  mutate(
+    ci_low     = point - 1.96*sd,
+    ci_high    = point + 1.96*sd,
+    ci_low_L   = point_L - 1.96*sd_L,
+    ci_high_L  = point_L + 1.96*sd_L
+  ) %>%
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>%
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+
+table_cb <- tibble(
+  noL <- c(sum(res_cb$contain)/nrow(res_cb)),
+  L <- c(sum(res_cb$contain_L)/nrow(res_cb))
+  )
+
+knitr::kable(table_cb,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Binary Exposure"
+             )
+```
+
 ```{r}
 result_cb2 <- matrix(ncol = 4,nrow = nsample)
 for (i in 1:nsample) {
@@ -258,7 +321,7 @@ for (i in 1:nsample) {
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
   pr <- 1/(1+exp(-Z))
-  Y.true <- 2*Z - rnorm(n)
+  Y.true <- 2*Z + rnorm(n)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
     L = L.true,
@@ -317,13 +380,93 @@ knitr::kable(table_cb2,
 
 ## (2) outcome: continous, exposure: continous
 ```{r}
+# z <- rnorm(1000)
+# y <- -1.5*z - rnorm(1000)
+# x <- 2*z + rnorm(1000)
+# psi.hat(Y=y,A=x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+# z <- tibble(z=z)
+# psi.hat(y,x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+
+result_cc <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- 5*z + rnorm(1000)
+  x <- -5*z - rnorm(1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  # summary(glm(y~x+z,data=dat))
+  # summary(glm(y~x,data=dat))
+  z <- tibble(z= dat$z)
+  tryCatch(
+           {
+      result_cc[i,1] <- exp(psi.hat(dat$y,dat$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+      result_cc[i,3] <- exp(psi.hat(dat$y,dat$x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+      }, error=function(e){})
+ 
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     set.seed(j)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+       tryCatch(
+           {
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+           }, error=function(e){})
+  }
+  result_cc[i,2] <-   sd(exp(result[,1]))
+  result_cc[i,4] <-   sd(exp(result[,2]))
+}
+
+res_cc <- as.data.frame(result_cc)
+
+colnames(res_cc) <- c("point","sd","point_L","sd_L")
+res_cc <- res_cc %>% 
+  mutate(
+    ci_low     = point - 1.96*sd,
+    ci_high    = point + 1.96*sd,
+    ci_low_L   = point_L - 1.96*sd_L,
+    ci_high_L  = point_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+
+table_cc <- tibble(
+  noL <- c(sum(res_cc$contain)/nrow(res_cc)),
+  L <- c(sum(res_cc$contain_L)/nrow(res_cc))
+  )
+
+  
+
+knitr::kable(table_cc,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Continuous Exposure"
+             )
+
+```
+
+```{r}
 result_cc2 <- matrix(ncol = 4,nrow = nsample)
 for (i in 1:nsample) {
   set.seed(i)
   L.true <- rnorm(n,0,1) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
   Y.true <- 5*Z + rnorm(n)
-  A.true <- -4*Z + rnorm(n)
+  A.true <- -5*Z - rnorm(n)
   dat <- tibble(
     L = L.true,
     Y = Y.true,
@@ -380,6 +523,80 @@ knitr::kable(table_cc2,
 ```
 
 ## (3) outcome: binary, exposure: continuous
+```{r}
+# z <- rnorm(1000)
+# y <- c_to_b(-2*z,1000)
+# x <- 2*z + rnorm(1000)
+# psi.hat(y,x, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+# z <- as.matrix(tibble(z))
+# psi.hat(y,x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+result_bc <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  z <- rnorm(1000)
+  y <- c_to_b(-2*z,1000)
+  x <- 2*z + rnorm(1000)
+  
+  dat <- tibble(
+    z = z,
+    y = y,
+    x = x
+  )
+  # summary(glm(y~x+z,data=dat))
+  # summary(glm(y~x,data=dat))
+  z <- tibble(z= dat$z)
+  result_bc[i,1] <- exp(psi.hat(dat$y,dat$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+  result_bc[i,3] <- exp(psi.hat(dat$y,dat$x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+     n <- dim(dat)[1]
+     set.seed(j)
+     indb1 <- sample(1:n, size = n, replace = TRUE)
+     datj <-  dat[indb1,]
+     z <- tibble(z= datj$z)
+     result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+     result[j,2] <- psi.hat(datj$y,datj$x,z, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+  }
+  result_bc[i,2] <-   sd(exp(result[,1]))
+  result_bc[i,4] <-   sd(exp(result[,2]))
+}
+
+res_bc <- as.data.frame(result_bc)
+
+colnames(res_bc) <- c("point","sd","point_L","sd_L")
+res_bc <- res_bc %>% 
+  mutate(
+    ci_low     = point - 1.96*sd,
+    ci_high    = point + 1.96*sd,
+    ci_low_L   = point_L - 1.96*sd_L,
+    ci_high_L  = point_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+  
+table_bc <- tibble(
+  noL <- c(sum(res_bc$contain)/nrow(res_bc)),
+  L <- c(sum(res_bc$contain_L)/nrow(res_bc))
+  )
+
+  
+
+knitr::kable(table_bc,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Continuous Exposure"
+             )
+
+
+
+```
+
 ```{r}
 result_bc2 <- matrix(ncol = 4,nrow = nsample)
 for (i in 1:nsample) {
@@ -446,7 +663,87 @@ knitr::kable(result_bc2,
 
 
 ## (4)  outcome: binary, exposure: binary
+```{r message=FALSE,warning=FALSE}
+result_bb <- matrix(ncol = 4,nrow = nsample)
+for (i in 1:nsample) {
+   
+      set.seed(i)
+      z <- rnorm(1000)
+      y <- c_to_b(3*z,1000)
+      x <- c_to_b(-2*z,1000)
+      
+      dat <- tibble(
+        z = z,
+        y = y,
+        x = x
+      )
+        # summary(glm(y~x+z,data=dat))
+        # summary(glm(y~x,data=dat))
+      z <- tibble(z= dat$z)
+       tryCatch(
+           {
+      result_bb[i,1] <- exp(psi.hat(dat$y,dat$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+      result_bb[i,3] <- exp(psi.hat(dat$y,dat$x,L=z, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+           }, error=function(e){})
+      result <- matrix(ncol = 2,nrow = nboots)
+      for (j in 1:nboots) {
+      
+         n <- dim(dat)[1]
+         set.seed(j)
+         indb1 <- sample(1:n, size = n, replace = TRUE)
+         datj <-  dat[indb1,]
+         z <- tibble(z= datj$z)
+         tryCatch(
+           {
+         result[j,1] <- psi.hat(datj$y,datj$x,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+         result[j,2] <- psi.hat(datj$y,datj$x,L=z, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+      }, error=function(e){})
+    }
 
+  result_bb[i,2] <- sd(exp(result[,1]),na.rm = TRUE)
+  result_bb[i,4] <- sd(exp(result[,2]),na.rm = TRUE)
+}
+
+res_bb <- as.data.frame(result_bb) %>% 
+  drop_na()
+
+colnames(res_bb) <- c("point","sd","point_L","sd_L")
+res_bb <- res_bb %>% 
+  mutate(
+    ci_low     = point - 1.96*sd,
+    ci_high    = point + 1.96*sd,
+    ci_low_L   = point_L - 1.96*sd_L,
+    ci_high_L  = point_L + 1.96*sd_L,
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+
+table_bb <- tibble(
+  noL <- c(sum(res_bb$contain)/nrow(res_bb)),
+  L <- c(sum(res_bb$contain_L)/nrow(res_bb))
+  )
+
+  
+
+knitr::kable(table_bb,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Binary Exposure"
+             ) 
+  
+
+
+```
+
+
+
+Easy way
 ```{r}
 result_bb2 <- matrix(ncol = 4,nrow = nsample)
 for (i in 1:nsample) {
@@ -454,9 +751,8 @@ for (i in 1:nsample) {
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
   pr <- 1/(1+exp(-Z))
-  pr2 <- 1/(1+exp(2*Z))
   Y.true <- rbinom(n,1,pr)
-  A.true <- rbinom(n,1,pr2)
+  A.true <- rbinom(n,1,pr)
   dat <- tibble(
     L = L.true,
     Y = Y.true,
