@@ -449,19 +449,18 @@ knitr::kable(result_bc2,
 
 ```{r}
 result_bb2 <- matrix(ncol = 4,nrow = nsample)
+set.seed(1)
 for (i in 1:nsample) {
-  set.seed(i)
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(1+exp(-Z))
-  pr2 <- 1/(1+exp(2*Z))
+  pr <- 1/(1+exp(5*Z))
   Y.true <- rbinom(n,1,pr)
-  A.true <- rbinom(n,1,pr2)
+  A.true <- rbinom(n,1,pr)
   dat <- tibble(
     L = L.true,
     Y = Y.true,
     A = A.true
-  )
+  )+
   # summary(glm(Y~A+L,data=dat))
   # summary(glm(Y~A,data=dat))
   L <- tibble(L = dat$L)
