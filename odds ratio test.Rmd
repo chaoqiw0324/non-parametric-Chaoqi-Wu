@@ -460,7 +460,7 @@ for (i in 1:nsample) {
     L = L.true,
     Y = Y.true,
     A = A.true
-  )+
+  )
   # summary(glm(Y~A+L,data=dat))
   # summary(glm(Y~A,data=dat))
   L <- tibble(L = dat$L)

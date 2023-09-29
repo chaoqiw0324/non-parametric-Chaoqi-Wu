@@ -21,7 +21,7 @@ header-includes:
 - \fancyhead[R]{\thepage}
 - \fancypagestyle{plain}{\pagestyle{fancy}}
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -31,20 +31,23 @@ library(tidyverse)
 library(arules)
 library(caret)
 library(BB)
-library(earth)
+library(ranger)
+library(randomForest)
+library(caret)
+library(lubridate)
 ```
 
 # Estimation 
 ```{r}
-psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
+psi.hat_ranger <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
   ## Function: estimate the odds ratio parameter psi
   ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
   ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
-  ## Output: A real number (vector) psi.hat, an estimate of the conditional odds ratio parameter psi
+  ## Output: A real number (vector) psi.hat_ranger, an estimate of the conditional odds ratio parameter psi
   
   ## Todo: generalize estimating eq to arbitrary dimensions
   
-  if(length(L)==0){
+  if (length(L) == 0) {
     fm_out <- "Y ~ A"
     fm_out <- as.formula(fm_out)
     fm_exp <- "A ~ Y"
@@ -57,32 +60,83 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
     fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
     fm_exp <- as.formula(fm_exp)
     dat <- data.frame(Y,A,L)
+    
   }
   
   
-  if(!is.null(subset)) Y <- Y[subset]
-  if(!is.null(subset)) A <- A[subset,]
-  if(!is.null(subset)) L <- L[subset,]
+  if (!is.null(subset)) Y <- Y[subset]
+  if (!is.null(subset)) A <- A[subset,]
+  if (!is.null(subset)) L <- L[subset,]
   #temp
   
   
   refA <- 0 
   refY <- 0
+  # parameter for ranger
+  mtry_up <- length(L)+1
     
     if(out.bin && exp.bin){
       h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
       dat1 <- dat
       dat2 <- dat
       
-      outcome <- glm(fm_out,family=binomial,data = dat)
+      # outcome 
+      ## outcome tune parameter 
+      outcome_ctrl <- trainControl(method = "cv",
+                                   classProbs = TRUE,
+                                   summaryFunction = twoClassSummary)
+      outcome_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "gini",
+                                  min.node.size = 1)
+      dat_out <- dat
+      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
+      outcome_train <- train(
+        fm_out,
+        dat_out,
+        method = "ranger",
+        metric = "ROC",
+        tuneGrid = outcome_grid,
+        trControl = outcome_ctrl
+        )
+      
+      # outcome <- ranger(fm_out, 
+      #                   num.trees = 1000,
+      #                   mtry = outcome_train$bestTune$mtry,
+      #                   data = dat_out)
       dat1$A <- 0 ## setting A=0
-      onm <- predict.glm(outcome, newdata=dat1,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+      # onm <- predict(outcome, data=dat1,type="response")$prediction
+      onm <- predict(outcome_train, data=dat1,type="prob")[,2]
       onm[Y==0] <- 1-onm[Y==0]
-    
-      exposure <- glm(fm_exp, family = binomial,data = dat)
+      
+      # exposure 
+      # exposure tune parameter
+      exposure_ctrl <- trainControl(method = "cv",
+                                    classProbs = TRUE,
+                                    summaryFunction = twoClassSummary)
+      exposure_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "gini",
+                                  min.node.size = 10)
+      dat_exp <- dat
+      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+      exposure_train <- train(
+        fm_exp,
+        dat_exp,
+        method = "ranger",
+        tuneGrid = exposure_grid,
+        metric= "ROC",
+        trControl = exposure_ctrl
+        )
+      ## exposure prediction  
+      # exposure <- ranger(fm_exp, 
+      #                    num.trees = 1000,
+      #                    mtry = exposure_train$bestTune$mtry,
+      #                    data = dat,
+      #                    classification = TRUE)
       dat2$Y <- 0 ## setting Y=0
-      enm <- predict.glm(exposure, newdata=dat2,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+      # enm <- predict(exposure, data=dat2,type="response")$predictions
+      enm <- predict(exposure_train, data=dat2,type="prob")[,2]
       enm[A==0] <- 1-enm[A==0]
+    
     
       d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
     
@@ -91,21 +145,114 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
       return(est$root)
     }
   
-    if(!out.bin){ 
-      outcome <- glm(fm_out, family = gaussian,data = dat)
-    } else outcome <- glm(fm_out, family = binomial,data = dat)
-    dat1 <- dat
+  
+  
+  
+    # at least one variable is non-bianry  
+  
+    if(!out.bin){
+      outcome_ctrl <- trainControl(method = "cv")
+      outcome_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "variance",
+                                  min.node.size = 10)
+      outcome_train <- train(
+        fm_out,
+        dat,
+        method = "ranger",
+        tuneGrid = outcome_grid,
+        trControl = outcome_ctrl
+        )
+      
+      # outcome <- ranger(fm_out, 
+      #                   num.trees = 1000,
+      #                   mtry = outcome_train$bestTune$mtry,
+      #                   data = dat)
+      dat1 <- dat
+      dat1$A <- 0 ## setting A=0
+      # onm <- predict(outcome, data=dat1,type="response")$prediction
+      onm <- predict(outcome_train, data=dat1,type="raw")
+      onm[Y==0] <- 1-onm[Y==0]
+    }else{
+      outcome_ctrl <- trainControl(method = "cv",
+                                   classProbs = TRUE,
+                                   summaryFunction = twoClassSummary)
+      outcome_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "gini",
+                                  min.node.size = 1)
+      dat1 <- dat_out <- dat
+      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
+      outcome_train <- train(
+        fm_out,
+        dat_out,
+        method = "ranger",
+        metric = "ROC",
+        tuneGrid = outcome_grid,
+        trControl = outcome_ctrl
+        )
+      
+      # outcome <- ranger(fm_out, 
+      #                   num.trees = 1000,
+      #                   mtry = outcome_train$bestTune$mtry,
+      #                   data = dat_out)
     dat1$A <- 0 ## setting A=0
-    onm <- predict.glm(outcome, newdata=dat1,type="response")
+    # onm <- predict(outcome, data=dat1,type="response")$prediction
+    onm <- predict(outcome_train, data=dat1,type="prob")[,2]
     onm[Y==0] <- 1-onm[Y==0]
+    }
+
   
     if(!exp.bin){
-      exposure <- glm(fm_exp, family = gaussian,data = dat)
-    } else exposure <- glm(fm_exp, family = binomial,data = dat)
-    dat2 <- dat
+      exposure_ctrl <- trainControl(method = "cv")
+      exposure_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "variance",
+                                  min.node.size = 1)
+      
+      exposure_train <- train(
+        fm_exp,
+        dat,
+        method = "ranger",
+        tuneGrid = exposure_grid,
+        trControl = exposure_ctrl
+        )
+      # exposure <- ranger(fm_exp, 
+      #                    num.trees = 1000,
+      #                    mtry = exposure_train$bestTune$mtry,
+      #                    data = dat)
+      dat2 <- dat
+      dat2$Y <- 0 ## setting Y=0
+      # enm <- predict(exposure, data=dat2,type="response")$predictions
+      enm <- predict(exposure_train, data=dat2,type="raw")
+      enm[A==0] <- 1-enm[A==0]
+    }else{
+      exposure_ctrl <- trainControl(method = "cv",
+                                    classProbs = TRUE,
+                                    summaryFunction = twoClassSummary)
+      exposure_grid <- expand.grid(mtry = mtry_up,
+                                  splitrule = "gini",
+                                  min.node.size = 10)
+      dat2 <- dat
+      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+      exposure_train <- train(
+        fm_exp,
+        dat_exp,
+        method = "ranger",
+        tuneGrid = exposure_grid,
+        metric= "ROC",
+        trControl = exposure_ctrl
+        )
+      
+      # exposure <- ranger(fm_exp, 
+      #                    num.trees = 1000,
+      #                    mtry = exposure_train$bestTune$mtry,
+      #                    data = dat,
+      #                    classification = TRUE)
     dat2$Y <- 0 ## setting Y=0
-    enm <- predict.glm(exposure, newdata=dat2,type="response")
+    # enm <- predict(exposure, data=dat2,type="response")$predictions
+    enm <- predict(exposure_train, data=dat2,type="prob")[,2]
     enm[A==0] <- 1-enm[A==0]
+    }
+    
+    
   
   
     #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
@@ -113,9 +260,173 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
     #return(est$root)
   
     U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
-    par.init <- c(1.0)
+    par.init <- c(0)
     sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
     est <- sol$par
+    
+  
+    return(est)
+
+}
+```
+
+```{r}
+# this version would not use caret
+psi.hat_ranger2 <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){
+  ## Function: estimate the odds ratio parameter psi
+  ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
+  ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
+  ## Output: A real number (vector) psi.hat_ranger, an estimate of the conditional odds ratio parameter psi
+  
+  ## Todo: generalize estimating eq to arbitrary dimensions
+  
+  if (length(L) == 0) {
+    fm_out <- "Y ~ A"
+    fm_out <- as.formula(fm_out)
+    fm_exp <- "A ~ Y"
+    fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
+    dat <- data.frame(Y,A)
+  }else{
+    covnames <- colnames(L)
+    fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
+    fm_out <- as.formula(fm_out)
+    fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
+    fm_exp <- as.formula(fm_exp)
+    dat <- data.frame(Y,A,L)
+    
+  }
+  
+  
+  if (!is.null(subset)) Y <- Y[subset]
+  if (!is.null(subset)) A <- A[subset,]
+  if (!is.null(subset)) L <- L[subset,]
+  #temp
+  
+  
+  refA <- 0 
+  refY <- 0
+  # parameter for ranger
+  mtry_up <- length(L)+1
+  mtry <- round(sqrt(mtry_up))
+    
+    if(out.bin && exp.bin){
+      h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
+      dat1 <- dat
+      dat2 <- dat
+      
+      # outcome 
+      ## outcome tune parameter 
+
+      dat_out <- dat
+      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
+      
+      outcome <- ranger(fm_out, 
+                        num.trees = 1000,
+                        mtry = mtry,
+                        data = dat_out,
+                        probability = TRUE)
+      dat1$A <- 0 ## setting A=0
+      onm <- predict(outcome, data=dat1,type="response")$prediction
+      # onm <- predict(outcome, data=dat1,type="prob")[,2]
+      onm[Y==0] <- 1-onm[Y==0]
+      
+      # exposure 
+      # exposure tune parameter
+
+      dat_exp <- dat
+      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+
+      exposure <- ranger(fm_exp, 
+                         num.trees = 1000,
+                         mtry = mtry,
+                         data = dat,
+                         probability = TRUE)
+      dat2$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, data=dat2,type="response")$predictions
+      # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
+      enm[A==0] <- 1-enm[A==0]
+    
+    
+      d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
+    
+      U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
+      est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter=1000, onm = onm, enm = enm, d.diff=d.diff)
+      return(est$root)
+    }
+  
+  
+  
+  
+    # at least one variable is non-bianry  
+  
+    if(!out.bin){
+
+      
+      outcome <- ranger(fm_out, 
+                        num.trees = 1000,
+                        mtry = mtry,
+                        data = dat)
+      dat1 <- dat
+      dat1$A <- 0 
+      # onm <- predict(outcome, data=dat1,type="response")$prediction
+      onm <- predict(outcome, data=dat1,type="response")$predictions
+      onm[Y==0] <- 1-onm[Y==0]
+    }else{
+      dat1 <- dat
+      dat_out <- dat
+      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
+      
+      outcome <- ranger(fm_out, 
+                        num.trees = 1000,
+                        mtry = mtry,
+                        data = dat_out,
+                        probability = TRUE)
+      dat1$A <- 0 ## setting A=0
+      onm <- predict(outcome, data=dat1,type="response")$prediction
+      # onm <- predict(outcome, data=dat1,type="prob")[,2]
+      onm[Y==0] <- 1-onm[Y==0]
+    }
+
+  
+    if(!exp.bin){
+
+      exposure <- ranger(fm_exp, 
+                          num.trees = 1000,
+                          mtry = mtry,
+                          data = dat)
+      dat2 <- dat
+      dat2$Y <- 0 ## setting Y=0
+      # enm <- predict(exposure, data=dat2,type="response")$predictions
+      enm <- predict(exposure, data=dat2,type="response")$predictions
+      enm[A==0] <- 1-enm[A==0]
+    }else{
+      dat_exp <- dat
+      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+
+      exposure <- ranger(fm_exp, 
+                         num.trees = 1000,
+                         mtry = mtry,
+                         data = dat,
+                         probability = TRUE)
+      dat2 <- dat
+      dat2$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, data=dat2,type="response")$predictions
+      # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
+      enm[A==0] <- 1-enm[A==0]
+    }
+    
+    
+  
+  
+    #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+    #est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm)
+    #return(est$root)
+  
+    U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+    par.init <- c(0)
+    sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
+    est <- sol$par
+    
   
     return(est)
 
@@ -123,28 +434,68 @@ psi.hat <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE,
 ```
 
 
-# Function test   
+
+
+# Ranger
 
 ```{r}
-n <- 1000
-nsample <- 1000
-nboots <- 1000
+n <- 5000
+nsample <- 10
+nboots <- 10
 ```
 
 ## (1) outcome: continuous, exposure: binary
 ```{r}
+# one time test
+# set.seed(1)
+# L1 <- runif(n,0,1)
+# L2 <- runif(n,0,1)
+# L3 <- runif(n,0,1)
+# L_vec <- tibble(
+#   L1 = L1,
+#   L2 = L2,
+#   L3 = L3)
+# L_vec <- L_vec %>%
+#   mutate(
+#     length = (L1^2 + L2^2 + L3^2)^0.5,
+#     L1 = L1/length,
+#     L2 = L2/length,
+#     L3 = L3/length
+#     ) %>%
+#   select(-length)
+# L.true <- 2*L1 + L2^2 + L1*L3
+# Z <- 0.5 + 0.5*L.true
+# pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
+# summary(pr)
+# Y.true <- 2*Z - rnorm(n)
+# A.true <- rbinom(n,1,pr)
+# dat <- tibble(
+#   Y = Y.true,
+#   A = A.true
+# ) %>% cbind(L_vec)
+# Y <- dat$Y
+# A <- dat$A
+# L <- L_vec
+# exp(psi.hat_ranger(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+# exp(psi.hat_ranger(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+  
+# bootstrap
+
 result_cb2 <- matrix(ncol = 4,nrow = nsample)
+time_cb2 <- rep(0,nsample)
 for (i in 1:nsample) {
+  time1 <- Sys.time()
+  set.seed(i)
   L1 <- runif(n,0,1)
   L2 <- runif(n,0,1)
   L3 <- runif(n,0,1)
   L_vec <- tibble(
-    L1=L1,
-    L2=L2,
-    L3=L3)
+    L1 = L1,
+    L2 = L2,
+    L3 = L3)
   L_vec <- L_vec %>% 
     mutate(
-      length = (L1^2+L2^2+L3^2)^0.5,
+      length = (L1^2 + L2^2 + L3^2)^0.5,
       L1 = L1/length,
       L2 = L2/length,
       L3 = L3/length
@@ -152,19 +503,15 @@ for (i in 1:nsample) {
     select(-length)
   L.true <- 2*L1 + L2^2 + L1*L3
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(1+exp(-Z))
+  pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
   Y.true <- 2*Z - rnorm(n)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
-    L = L.true,
     Y = Y.true,
     A = A.true
-  )
-  # summary(glm(Y~A+L,data=dat))
-  # summary(glm(Y~A,data=dat))
-  L <- tibble(L = dat$L)
-  result_cb2[i,1] <- exp(psi.hat(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
-  result_cb2[i,3] <- exp(psi.hat(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+  ) %>% cbind(L_vec)
+  result_cb2[i,1] <- exp(psi.hat_ranger2(Y= dat$Y,A = dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
+  result_cb2[i,3] <- exp(psi.hat_ranger2(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE))
   result <- matrix(ncol = 2,nrow = nboots)
   for (j in 1:nboots) {
     n <- dim(dat)[1]
@@ -172,14 +519,17 @@ for (i in 1:nsample) {
     indb1 <- sample(1:n, size = n, replace = TRUE)
     datj <-  dat[indb1,]
     L <- tibble(L = datj$L)
-    result[j,1] <- psi.hat(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
-    result[j,2] <- psi.hat(datj$Y,datj$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+    result[j,1] <- psi.hat_ranger2(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+    result[j,2] <- psi.hat_ranger2(datj$Y,datj$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   }
   result_cb2[i,2] <- sd(result[,1])
   result_cb2[i,4] <- sd(result[,2])
+  time2 <- Sys.time()
+  time_cb2[i] <- seconds(time2-time1)
 }
 
 res_cb2 <- as.data.frame(result_cb2[,1:4])
+
 
 colnames(res_cb2) <- c("point","sd","point_L","sd_L")
 res_cb2 <- res_cb2 %>% 
@@ -208,27 +558,85 @@ knitr::kable(table_cb2,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Binary Exposure"
              ) 
+
+time_cb2 <- tibble(timecost = mean(time_cb2))
+knitr::kable(time_cb2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Time Cost"),
+             caption = "Time Cost for Each Sample"
+             ) 
+
 ```
+
 
 ## (2) outcome: continous, exposure: continous
 ```{r}
+# set.seed(1)
+# L1 <- runif(n,0,1)
+# L2 <- runif(n,0,1)
+# L3 <- runif(n,0,1)
+# L_vec <- tibble(
+#   L1 = L1,
+#   L2 = L2,
+#   L3 = L3)
+# L_vec <- L_vec %>%
+#   mutate(
+#     length = (L1^2 + L2^2 + L3^2)^0.5,
+#     L1 = L1/length,
+#     L2 = L2/length,
+#     L3 = L3/length
+#     ) %>%
+#   select(-length)
+# L.true <- 2*L1 + L2^2 + L1*L3
+# Z <- 0.5 + 0.5*L.true
+# Y.true <- 5*Z + rnorm(n)
+# A.true <- -4*Z + rnorm(n)
+# dat <- tibble(
+#   Y = Y.true,
+#   A = A.true
+# ) %>% cbind(L_vec)
+# # summary(glm(Y~A+L,data=dat))
+# # summary(glm(Y~A,data=dat))
+# L <- tibble(L= dat$L)
+# Y <- dat$Y
+# A <- dat$A
+# exp(psi.hat_ranger(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+# exp(psi.hat_ranger(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+
+
 result_cc2 <- matrix(ncol = 4,nrow = nsample)
+time_cc2 <- rep(0,nsample)
 for (i in 1:nsample) {
-  set.seed(i)
-  L.true <- rnorm(n,0,1) ## L.true <- cbind(L.true,rep(0,N))
+  time1 <- Sys.time()
+  L1 <- runif(n,0,1)
+  L2 <- runif(n,0,1)
+  L3 <- runif(n,0,1)
+  L_vec <- tibble(
+    L1 = L1,
+    L2 = L2,
+    L3 = L3)
+  L_vec <- L_vec %>% 
+    mutate(
+      length = (L1^2 + L2^2 + L3^2)^0.5,
+      L1 = L1/length,
+      L2 = L2/length,
+      L3 = L3/length
+      ) %>% 
+    select(-length)
+  L.true <- 2*L1 + L2^2 + L1*L3
   Z <- 0.5 + 0.5*L.true
   Y.true <- 5*Z + rnorm(n)
   A.true <- -4*Z + rnorm(n)
   dat <- tibble(
-    L = L.true,
     Y = Y.true,
     A = A.true
-  )
+  ) %>% cbind(L_vec)
   # summary(glm(Y~A+L,data=dat))
   # summary(glm(Y~A,data=dat))
   L <- tibble(L= dat$L)
-  result_cc2[i,1] <- exp(psi.hat(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
-  result_cc2[i,3] <- exp(psi.hat(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+  result_cc2[i,1] <- exp(psi.hat_ranger2(Y = dat$Y,A = dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
+  result_cc2[i,3] <- exp(psi.hat_ranger2(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE))
   result <- matrix(ncol = 2,nrow = nboots)
   for (j in 1:nboots) {
     n <- dim(dat)[1]
@@ -236,11 +644,13 @@ for (i in 1:nsample) {
     indb1 <- sample(1:n, size = n, replace = TRUE)
     datj <-  dat[indb1,]
     L <- tibble(L = datj$L)
-    result[j,1] <- psi.hat(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
-    result[j,2] <- psi.hat(datj$Y,datj$A,L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+    result[j,1] <- psi.hat_ranger2(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+    result[j,2] <- psi.hat_ranger2(datj$Y,datj$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
   }
   result_cc2[i,2] <-   sd(exp(result[,1]))
   result_cc2[i,4] <-   sd(exp(result[,2]))
+  time2 <- Sys.time()
+  time_cc2[i] <- seconds(time2-time1)
 }
 
 res_cc2 <- as.data.frame(result_cc2[,1:4])
@@ -272,4 +682,713 @@ knitr::kable(table_cc2,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Continuous Exposure"
              ) 
+
+time_cc2 <- tibble(timecost = mean(time_cc2))
+knitr::kable(time_cc2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Time Cost"),
+             caption = "Time Cost for Each Sample"
+             ) 
 ```
+
+## (3) outcome: binary, exposure: continuous
+```{r}
+# one time test
+# set.seed(1)
+# L1 <- runif(n,0,1)
+# L2 <- runif(n,0,1)
+# L3 <- runif(n,0,1)
+# L_vec <- tibble(
+#   L1 = L1,
+#   L2 = L2,
+#   L3 = L3)
+# L_vec <- L_vec %>%
+#   mutate(
+#     length = (L1^2 + L2^2 + L3^2)^0.5,
+#     L1 = L1/length,
+#     L2 = L2/length,
+#     L3 = L3/length
+#     ) %>%
+#   select(-length)
+# L.true <- 2*L1 + L2^2 + L1*L3
+# Z <- 0.5 + 0.5*L.true
+# pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
+# Y.true <- rbinom(n,1,pr)
+# A.true <- 2*Z + rnorm(n)
+# dat <- tibble(
+#   Y = Y.true,
+#   A = A.true
+# ) %>% cbind(L_vec)
+# Y <- dat$Y
+# A <- dat$A
+# L <- tibble(L = dat$L)
+# exp(psi.hat_ranger(dat$Y,dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+# exp(psi.hat_ranger(dat$Y,dat$A,L=L_vec, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+
+# bootstrap
+result_bc2 <- matrix(ncol = 4,nrow = nsample)
+time_bc2 <- rep(0,nsample)
+for (i in 1:nsample) {
+  time1 <- Sys.time()
+  L1 <- runif(n,0,1)
+  L2 <- runif(n,0,1)
+  L3 <- runif(n,0,1)
+  L_vec <- tibble(
+    L1 = L1,
+    L2 = L2,
+    L3 = L3)
+  L_vec <- L_vec %>% 
+    mutate(
+      length = (L1^2 + L2^2 + L3^2)^0.5,
+      L1 = L1/length,
+      L2 = L2/length,
+      L3 = L3/length
+      ) %>% 
+    select(-length)
+  L.true <- 2*L1 + L2^2 + L1*L3
+  Z <- 0.5 + 0.5*L.true
+  pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
+  Y.true <- rbinom(n,1,pr)
+  A.true <- 2*Z + rnorm(n)
+  dat <- tibble(
+    Y = Y.true,
+    A = A.true
+  ) %>% cbind(L_vec)
+  # summary(glm(Y~A+L,data=dat))
+  # summary(glm(Y~A,data=dat))
+  L <- tibble(L = dat$L)
+  result_bc2[i,1] <- exp(psi.hat_ranger2(dat$Y,dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+  result_bc2[i,3] <- exp(psi.hat_ranger2(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE))
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+    n <- dim(dat)[1]
+    set.seed(j)
+    indb1 <- sample(1:n, size = n, replace = TRUE)
+    datj <-  dat[indb1,]
+    L <- tibble(L = datj$L)
+    result[j,1] <- psi.hat_ranger2(datj$Y,datj$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+    result[j,2] <- psi.hat_ranger2(datj$Y,datj$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+  }
+  result_bc2[i,2] <- sd(exp(result[,1]))
+  result_bc2[i,4] <- sd(exp(result[,2]))
+  time2 <- Sys.time()
+  time_bc2[i] <- seconds(time2-time1)
+}
+
+res_bc2 <- as.data.frame(result_bc2[,1:4])
+
+colnames(res_bc2) <- c("point","sd","point_L","sd_L")
+res_bc2 <- res_bc2 %>% 
+  mutate(
+    ci_low    = point - 1.96*sd,
+    ci_high   = point + 1.96*sd,
+    ci_low_L  = point_L - 1.96*sd_L,
+    ci_high_L = point_L + 1.96*sd_L
+  ) %>% 
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>% 
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+
+result_bc2 <- tibble(
+  noL <- c(sum(res_bc2$contain)/nrow(res_bc2)),
+  L <- c(sum(res_bc2$contain_L)/nrow(res_bc2))
+  )
+
+knitr::kable(result_bc2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Continuous Exposure"
+             ) 
+
+time_bc2 <- tibble(timecost = mean(time_bc2))
+knitr::kable(time_bc2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Time Cost"),
+             caption = "Time Cost for Each Sample"
+             ) 
+```
+
+
+## (4)  outcome: binary, exposure: binary
+
+```{r}
+# one time test
+# set.seed(1)
+# L1 <- runif(n,0,1)
+# L2 <- runif(n,0,1)
+# L3 <- runif(n,0,1)
+# L_vec <- tibble(
+#   L1 = L1,
+#   L2 = L2,
+#   L3 = L3)
+# L_vec <- L_vec %>%
+#   mutate(
+#     length = (L1^2 + L2^2 + L3^2)^0.5,
+#     L1 = L1/length,
+#     L2 = L2/length,
+#     L3 = L3/length
+#     ) %>%
+#   select(-length)
+# L.true <- 2*L1 + L2^2 + L1*L3
+# Z <- 0.5 + 0.5*L.true
+# pr <- 1/(1+3.5*exp(-Z)) 
+# Y.true <- rbinom(n,1,pr)
+# A.true <- rbinom(n,1,pr)
+# dat <- tibble(
+#   Y = Y.true,
+#   A = A.true
+# ) %>% cbind(L_vec)
+# Y <- dat$Y
+# A <- dat$A
+# L <- L_vec
+# exp(psi.hat_ranger(dat$Y,dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+# exp(psi.hat_ranger(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+#   
+# boostrap
+result_bb2 <- matrix(ncol = 4,nrow = nsample)
+time_bb2 <- rep(0,nsample)
+for (i in 1:nsample) {
+  time1 <- Sys.time()
+  set.seed(i)
+  L1 <- runif(n,0,1)
+  L2 <- runif(n,0,1)
+  L3 <- runif(n,0,1)
+  L_vec <- tibble(
+    L1 = L1,
+    L2 = L2,
+    L3 = L3)
+  L_vec <- L_vec %>%
+    mutate(
+      length = (L1^2 + L2^2 + L3^2)^0.5,
+      L1 = L1/length,
+      L2 = L2/length,
+      L3 = L3/length
+      ) %>%
+    select(-length)
+  L.true <- 2*L1 + L2^2 + L1*L3
+  Z <- 0.5 + 0.5*L.true
+  pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
+  Y.true <- rbinom(n,1,pr)
+  A.true <- rbinom(n,1,pr)
+  dat <- tibble(
+    Y = Y.true,
+    A = A.true
+  ) %>% cbind(L_vec)
+  # summary(glm(Y~A+L,data=dat))
+  # summary(glm(Y~A,data=dat))
+  result_bb2[i,1] <- exp(psi.hat_ranger(Y = dat$Y,A = dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+  result_bb2[i,3] <- exp(psi.hat_ranger(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE))
+  result <- matrix(ncol = 2,nrow = nboots)
+  for (j in 1:nboots) {
+    n <- dim(dat)[1]
+    set.seed(j)
+    indb1 <- sample(1:n, size = n, replace = TRUE)
+    datj <-  dat[indb1,]
+    L <- tibble(L = datj$L)
+    result[j,1] <- psi.hat_ranger(datj$Y,datj$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+    result[j,2] <- psi.hat_ranger(datj$Y,datj$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  }
+  result_bb2[i,2] <- sd(result[,1])
+  result_bb2[i,4] <- sd(result[,2])
+  time2 <- Sys.time()
+  time_bb2[i] <- seconds(time2-time1)
+}
+
+res_bb2 <- as.data.frame(result_bb2[,1:4])
+
+colnames(res_bb2) <- c("point","sd","point_L","sd_L")
+res_bb2 <- res_bb2 %>%
+  mutate(
+    ci_low    = point - 1.96*sd,
+    ci_high   = point + 1.96*sd,
+    ci_low_L  = point_L - 1.96*sd_L,
+    ci_high_L = point_L + 1.96*sd_L
+  ) %>%
+  mutate(
+    contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0),
+    contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0)
+  ) %>%
+  select(
+    ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L
+  )
+
+table_bb2 <- tibble(
+  noL <- c(sum(res_bb2$contain)/nrow(res_bb2)),
+  L <- c(sum(res_bb2$contain_L)/nrow(res_bb2))
+  )
+
+
+
+knitr::kable(table_bb2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Binary Exposure"
+             )
+
+time_bb2 <- tibble(timecost = mean(time_bb2))
+knitr::kable(time_bb2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Time Cost"),
+             caption = "Time Cost for Each Sample"
+             ) 
+```
+
+<!-- # Randomforest -->
+
+<!-- ```{r} -->
+<!-- psi.hat_randomforest <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE){ -->
+<!--   ## Function: estimate the odds ratio parameter psi -->
+<!--   ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0) -->
+<!--   ##        2. An exposure nuisance model, enm = g(A|Y=0,L) -->
+<!--   ## Output: A real number (vector) psi.hat, an estimate of the conditional odds ratio parameter psi -->
+
+<!--   ## Todo: generalize estimating eq to arbitrary dimensions -->
+
+<!--   if (length(L) == 0) { -->
+<!--     fm_out <- "Y ~ A" -->
+<!--     fm_out <- as.formula(fm_out) -->
+<!--     fm_exp <- "A ~ Y" -->
+<!--     fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty -->
+<!--     dat <- data.frame(Y,A) -->
+<!--   }else{ -->
+<!--     covnames <- colnames(L) -->
+<!--     fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+")) -->
+<!--     fm_out <- as.formula(fm_out) -->
+<!--     fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+")) -->
+<!--     fm_exp <- as.formula(fm_exp) -->
+<!--     dat <- data.frame(Y,A,L) -->
+<!--     # dat <- data.frame(dat$Y,dat$A,L) -->
+<!--   } -->
+
+
+<!--   if (!is.null(subset)) Y <- Y[subset] -->
+<!--   if (!is.null(subset)) A <- A[subset,] -->
+<!--   if (!is.null(subset)) L <- L[subset,] -->
+<!--   #temp -->
+
+
+<!--   refA <- 0 -->
+<!--   refY <- 0 -->
+
+<!--     if(out.bin && exp.bin){ -->
+<!--       h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5) -->
+<!--       dat_Y <- dat %>% -->
+<!--         mutate( -->
+<!--           Y = factor(Y), -->
+<!--           ) -->
+<!--       dat_A <- dat %>% -->
+<!--         mutate( -->
+<!--           A = factor(A), -->
+<!--           ) -->
+
+<!--       dat1 <- dat_Y -->
+<!--       dat2 <- dat_A -->
+
+
+
+<!--       outcome <- randomForest(fm_out, data = dat_Y) -->
+<!--       dat1$A <- 0 ## setting A = 0 -->
+<!--       onm <- tibble( -->
+<!--         Y = predict(outcome, newdata = dat1,type = "response") -->
+<!--         ) # may cause warning: prediction from a rank-deficient fit may be misleading -->
+<!--       onm$Y <- as.numeric(onm$Y) -->
+<!--       onm[which(onm$Y == 0),] <- 1 - onm[which(onm$Y == 0),] -->
+
+<!--       exposure <- randomForest(fm_exp, data = dat_A) -->
+<!--       dat2$Y <- 0 ## setting Y = 0 -->
+
+<!--       enm <- tibble( -->
+<!--         A = predict(exposure, newdata = dat2,type = "response") -->
+<!--         ) # may cause warning: prediction from a rank-deficient fit may be misleading -->
+<!--       enm$A = as.numeric(enm$A) -->
+<!--       enm[which(A == 0),] <- 1 - enm[which(A == 0),] -->
+
+<!--       d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary -->
+
+<!--       U <- function(psi,onm,enm,d.diff){sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) } -->
+<!--       est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter = 1000, onm = onm, enm = enm, d.diff = d.diff) -->
+<!--       return(est$root) -->
+<!--     } -->
+
+<!--     # outcome not binary -->
+<!--     if(!out.bin){ -->
+<!--       outcome <- randomForest(fm_out, data = dat) -->
+<!--       dat1 <- dat -->
+<!--     }else{ -->
+<!--       dat_Y <- dat %>% -->
+<!--         mutate( -->
+<!--           Y = factor(Y), -->
+<!--           ) -->
+<!--       dat1 <- dat_Y -->
+<!--       outcome <- randomForest(fm_out, data = dat_Y) -->
+<!--       } -->
+
+<!--     dat1$A <- 0 ## setting A = 0 -->
+<!--     onm <- tibble( -->
+<!--         Y = predict(outcome, newdata = dat1,type = "response") -->
+<!--         ) # may cause warning: prediction from a rank-deficient fit may be misleading -->
+<!--     onm$Y <- as.numeric(onm$Y) -->
+<!--     onm[which(onm$Y == 0),] <- 1 - onm[which(onm$Y == 0),] -->
+
+<!--     # exposure not binary -->
+<!--     if(!exp.bin){ -->
+<!--       exposure <- randomForest(fm_exp, data = dat) -->
+<!--       dat2 <- dat -->
+<!--     }else{ -->
+<!--       dat_A <- dat %>% -->
+<!--         mutate( -->
+<!--           A = factor(A), -->
+<!--           ) -->
+<!--       dat2 <- dat_A -->
+<!--       exposure <- randomForest(fm_exp, data = dat_A) -->
+<!--     } -->
+<!--     dat2$Y <- 0 ## setting Y = 0 -->
+<!--     enm <- tibble( -->
+<!--         A = predict(exposure, newdata = dat2,type = "response") -->
+<!--         ) # may cause warning: prediction from a rank-deficient fit may be misleading -->
+<!--       enm$A = as.numeric(enm$A) -->
+<!--       enm[which(A == 0),] <- 1 - enm[which(A == 0),] -->
+
+
+<!--     #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )} -->
+<!--     #est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm) -->
+<!--     #return(est$root) -->
+
+<!--     U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )} -->
+<!--     par.init <- c(1.0) -->
+<!--     sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) -->
+<!--     est <- sol$par -->
+
+
+<!--     return(est) -->
+
+<!-- } -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- n <- 100 -->
+<!-- nsample <- 10 -->
+<!-- nboots <- 10 -->
+<!-- ``` -->
+
+<!-- ## (1) rf outcome: continuous, exposure: binary -->
+<!-- ```{r} -->
+<!-- result_cb2 <- matrix(ncol = 4,nrow = nsample) -->
+<!-- for (i in 1:nsample) { -->
+<!--   L1 <- runif(n,0,1) -->
+<!--   L2 <- runif(n,0,1) -->
+<!--   L3 <- runif(n,0,1) -->
+<!--   L_vec <- tibble( -->
+<!--     L1 = L1, -->
+<!--     L2 = L2, -->
+<!--     L3 = L3) -->
+<!--   L_vec <- L_vec %>% -->
+<!--     mutate( -->
+<!--       length = (L1^2 + L2^2 + L3^2)^0.5, -->
+<!--       L1 = L1/length, -->
+<!--       L2 = L2/length, -->
+<!--       L3 = L3/length -->
+<!--       ) %>% -->
+<!--     select(-length) -->
+<!--   L.true <- 2*L1 + L2^2 + L1*L3 -->
+<!--   Z <- 0.5 + 0.5*L.true -->
+<!--   pr <- 1/(1+exp(-Z)) -->
+<!--   Y.true <- 2*Z - rnorm(n) -->
+<!--   A.true <- rbinom(n,1,pr) -->
+<!--   dat <- tibble( -->
+<!--     Y = Y.true, -->
+<!--     A = A.true -->
+<!--   ) %>% cbind(L_vec) -->
+<!--   result_cb2[i,1] <- exp(psi.hat_randomforest(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)) -->
+<!--   result_cb2[i,3] <- exp(psi.hat_randomforest(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)) -->
+<!--   result <- matrix(ncol = 2,nrow = nboots) -->
+<!--   for (j in 1:nboots) { -->
+<!--     n <- dim(dat)[1] -->
+<!--     set.seed(j) -->
+<!--     indb1 <- sample(1:n, size = n, replace = TRUE) -->
+<!--     datj <-  dat[indb1,] -->
+<!--     L <- tibble(L = datj$L) -->
+<!--     result[j,1] <- psi.hat_randomforest(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE) -->
+<!--     result[j,2] <- psi.hat_randomforest(datj$Y,datj$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE) -->
+<!--   } -->
+<!--   result_cb2[i,2] <- sd(result[,1]) -->
+<!--   result_cb2[i,4] <- sd(result[,2]) -->
+<!-- } -->
+
+<!-- res_cb2 <- as.data.frame(result_cb2[,1:4]) -->
+
+<!-- colnames(res_cb2) <- c("point","sd","point_L","sd_L") -->
+<!-- res_cb2 <- res_cb2 %>% -->
+<!--   mutate( -->
+<!--     ci_low   = point - 1.96*sd, -->
+<!--     ci_high  = point + 1.96*sd, -->
+<!--     ci_low_L   = point_L - 1.96*sd_L, -->
+<!--     ci_high_L  = point_L + 1.96*sd_L -->
+<!--   ) %>% -->
+<!--   mutate( -->
+<!--     contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0), -->
+<!--     contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0) -->
+<!--   ) %>% -->
+<!--   select( -->
+<!--     ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L -->
+<!--   ) -->
+
+<!-- table_cb2 <- tibble( -->
+<!--   noL <- c(sum(res_cb2$contain)/nrow(res_cb2)), -->
+<!--   L <- c(sum(res_cb2$contain_L)/nrow(res_cb2)) -->
+<!--   ) -->
+
+<!-- knitr::kable(table_cb2, -->
+<!--              format = "pipe", -->
+<!--              digits = 3, -->
+<!--              col.names = c("Coverage Rate","Coverage Rate Condition on L"), -->
+<!--              caption = "Result For Continuous Outcome to Binary Exposure" -->
+<!--              ) -->
+<!-- ``` -->
+
+<!-- ## (2) rf outcome: continous, exposure: continous -->
+<!-- ```{r} -->
+<!-- result_cc2 <- matrix(ncol = 4,nrow = nsample) -->
+<!-- for (i in 1:nsample) { -->
+<!--   L1 <- runif(n,0,1) -->
+<!--   L2 <- runif(n,0,1) -->
+<!--   L3 <- runif(n,0,1) -->
+<!--   L_vec <- tibble( -->
+<!--     L1 = L1, -->
+<!--     L2 = L2, -->
+<!--     L3 = L3) -->
+<!--   L_vec <- L_vec %>% -->
+<!--     mutate( -->
+<!--       length = (L1^2 + L2^2 + L3^2)^0.5, -->
+<!--       L1 = L1/length, -->
+<!--       L2 = L2/length, -->
+<!--       L3 = L3/length -->
+<!--       ) %>% -->
+<!--     select(-length) -->
+<!--   L.true <- 2*L1 + L2^2 + L1*L3 -->
+<!--   Z <- 0.5 + 0.5*L.true -->
+<!--   Y.true <- 5*Z + rnorm(n) -->
+<!--   A.true <- -4*Z + rnorm(n) -->
+<!--   dat <- tibble( -->
+<!--     Y = Y.true, -->
+<!--     A = A.true -->
+<!--   ) %>% cbind(L_vec) -->
+<!--   # summary(glm(Y~A+L,data=dat)) -->
+<!--   # summary(glm(Y~A,data=dat)) -->
+<!--   L <- tibble(L= dat$L) -->
+<!--   result_cc2[i,1] <- exp(psi.hat_randomforest(dat$Y,dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)) -->
+<!--   result_cc2[i,3] <- exp(psi.hat_randomforest(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)) -->
+<!--   result <- matrix(ncol = 2,nrow = nboots) -->
+<!--   for (j in 1:nboots) { -->
+<!--     n <- dim(dat)[1] -->
+<!--     set.seed(j) -->
+<!--     indb1 <- sample(1:n, size = n, replace = TRUE) -->
+<!--     datj <-  dat[indb1,] -->
+<!--     L <- tibble(L = datj$L) -->
+<!--     result[j,1] <- psi.hat_randomforest(datj$Y,datj$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE) -->
+<!--     result[j,2] <- psi.hat_randomforest(datj$Y,datj$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE) -->
+<!--   } -->
+<!--   result_cc2[i,2] <-   sd(exp(result[,1])) -->
+<!--   result_cc2[i,4] <-   sd(exp(result[,2])) -->
+<!-- } -->
+
+<!-- res_cc2 <- as.data.frame(result_cc2[,1:4]) -->
+
+<!-- colnames(res_cc2) <- c("point","sd","point_L","sd_L") -->
+<!-- res_cc2 <- res_cc2 %>% -->
+<!--   mutate( -->
+<!--     ci_low    = point - 1.96*sd, -->
+<!--     ci_high   = point + 1.96*sd, -->
+<!--     ci_low_L  = point_L - 1.96*sd_L, -->
+<!--     ci_high_L = point_L + 1.96*sd_L -->
+<!--   ) %>% -->
+<!--   mutate( -->
+<!--     contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0), -->
+<!--     contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0) -->
+<!--   ) %>% -->
+<!--   select( -->
+<!--     ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L -->
+<!--   ) -->
+
+<!-- table_cc2 <- tibble( -->
+<!--   noL <- c(sum(res_cc2$contain)/nrow(res_cc2)), -->
+<!--   L <- c(sum(res_cc2$contain_L)/nrow(res_cc2)) -->
+<!--   ) -->
+
+<!-- knitr::kable(table_cc2, -->
+<!--              format = "pipe", -->
+<!--              digits = 3, -->
+<!--              col.names = c("Coverage Rate","Coverage Rate Condition on L"), -->
+<!--              caption = "Result For Continuous Outcome to Continuous Exposure" -->
+<!--              ) -->
+<!-- ``` -->
+
+<!-- ## (3) rf outcome: binary, exposure: continuous -->
+<!-- ```{r} -->
+<!-- result_bc2 <- matrix(ncol = 4,nrow = nsample) -->
+<!-- for (i in 1:nsample) { -->
+<!--   L1 <- runif(n,0,1) -->
+<!--   L2 <- runif(n,0,1) -->
+<!--   L3 <- runif(n,0,1) -->
+<!--   L_vec <- tibble( -->
+<!--     L1 = L1, -->
+<!--     L2 = L2, -->
+<!--     L3 = L3) -->
+<!--   L_vec <- L_vec %>% -->
+<!--     mutate( -->
+<!--       length = (L1^2 + L2^2 + L3^2)^0.5, -->
+<!--       L1 = L1/length, -->
+<!--       L2 = L2/length, -->
+<!--       L3 = L3/length -->
+<!--       ) %>% -->
+<!--     select(-length) -->
+<!--   L.true <- 2*L1 + L2^2 + L1*L3 -->
+<!--   Z <- 0.5 + 0.5*L.true -->
+<!--   pr <- 1/(1+exp(-Z)) -->
+<!--   Y.true <- rbinom(n,1,pr) -->
+<!--   A.true <- 2*Z + rnorm(n) -->
+<!--   dat <- tibble( -->
+<!--     Y = Y.true, -->
+<!--     A = A.true -->
+<!--   ) %>% cbind(L_vec) -->
+<!--   # summary(glm(Y~A+L,data=dat)) -->
+<!--   # summary(glm(Y~A,data=dat)) -->
+<!--   result_bc2[i,1] <- exp(psi.hat_randomforest(dat$Y,dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)) -->
+<!--   result_bc2[i,3] <- exp(psi.hat_randomforest(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)) -->
+<!--   result <- matrix(ncol = 2,nrow = nboots) -->
+<!--   for (j in 1:nboots) { -->
+<!--     n <- dim(dat)[1] -->
+<!--     set.seed(j) -->
+<!--     indb1 <- sample(1:n, size = n, replace = TRUE) -->
+<!--     datj <-  dat[indb1,] -->
+<!--     L <- tibble(L = datj$L) -->
+<!--     result[j,1] <- psi.hat_randomforest(datj$Y,datj$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE) -->
+<!--     result[j,2] <- psi.hat_randomforest(datj$Y,datj$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE) -->
+<!--   } -->
+<!--   result_bc2[i,2] <- sd(exp(result[,1])) -->
+<!--   result_bc2[i,4] <- sd(exp(result[,2])) -->
+<!-- } -->
+
+<!-- res_bc2 <- as.data.frame(result_bc2[,1:4]) -->
+
+<!-- colnames(res_bc2) <- c("point","sd","point_L","sd_L") -->
+<!-- res_bc2 <- res_bc2 %>% -->
+<!--   mutate( -->
+<!--     ci_low    = point - 1.96*sd, -->
+<!--     ci_high   = point + 1.96*sd, -->
+<!--     ci_low_L  = point_L - 1.96*sd_L, -->
+<!--     ci_high_L = point_L + 1.96*sd_L -->
+<!--   ) %>% -->
+<!--   mutate( -->
+<!--     contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0), -->
+<!--     contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0) -->
+<!--   ) %>% -->
+<!--   select( -->
+<!--     ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L -->
+<!--   ) -->
+
+<!-- result_bc2 <- tibble( -->
+<!--   noL <- c(mean(res_bc2$contain,na.rm = TRUE)), -->
+<!--   L <- c(mean(res_bc2$contain_L,na.rm = TRUE)) -->
+<!--   ) -->
+
+<!-- knitr::kable(result_bc2, -->
+<!--              format = "pipe", -->
+<!--              digits = 3, -->
+<!--              col.names = c("Coverage Rate","Coverage Rate Condition on L"), -->
+<!--              caption = "Result For Binary Outcome to Continuous Exposure" -->
+<!--              ) -->
+<!-- ``` -->
+
+
+<!-- ## (4) rf outcome: binary, exposure: binary -->
+
+<!-- ```{r} -->
+<!-- result_bb2 <- matrix(ncol = 4,nrow = nsample) -->
+<!-- for (i in 1:nsample) { -->
+<!--   L1 <- runif(n,0,1) -->
+<!--   L2 <- runif(n,0,1) -->
+<!--   L3 <- runif(n,0,1) -->
+<!--   L_vec <- tibble( -->
+<!--     L1 = L1, -->
+<!--     L2 = L2, -->
+<!--     L3 = L3) -->
+<!--   L_vec <- L_vec %>% -->
+<!--     mutate( -->
+<!--       length = (L1^2 + L2^2 + L3^2)^0.5, -->
+<!--       L1 = L1/length, -->
+<!--       L2 = L2/length, -->
+<!--       L3 = L3/length -->
+<!--       ) %>% -->
+<!--     select(-length) -->
+<!--   L.true <- 2*L1 + L2^2 + L1*L3 -->
+<!--   Z <- 0.5 + 0.5*L.true -->
+<!--   pr <- 1/(1+exp(5*Z)) -->
+<!--   Y.true <- rbinom(n,1,pr) -->
+<!--   A.true <- rbinom(n,1,pr) -->
+<!--   dat <- tibble( -->
+<!--     Y = Y.true, -->
+<!--     A = A.true -->
+<!--   ) %>% cbind(L_vec) -->
+<!--   # summary(glm(Y~A+L,data=dat)) -->
+<!--   # summary(glm(Y~A,data=dat)) -->
+<!--   # Y = dat$Y -->
+<!--   # A = dat$A -->
+<!--   result_bb2[i,1] <- exp(psi.hat_randomforest(dat$Y,dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)) -->
+<!--   result_bb2[i,3] <- exp(psi.hat_randomforest(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)) -->
+<!--   result <- matrix(ncol = 2,nrow = nboots) -->
+<!--   for (j in 1:nboots) { -->
+<!--     n <- dim(dat)[1] -->
+<!--     set.seed(j) -->
+<!--     indb1 <- sample(1:n, size = n, replace = TRUE) -->
+<!--     datj <-  dat[indb1,] -->
+<!--     L <- tibble(L = datj$L) -->
+<!--     result[j,1] <- psi.hat_randomforest(datj$Y,datj$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE) -->
+<!--     result[j,2] <- psi.hat_randomforest(datj$Y,datj$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE) -->
+<!--   } -->
+<!--   result_bb2[i,2] <- sd(result[,1]) -->
+<!--   result_bb2[i,4] <- sd(result[,2]) -->
+<!-- } -->
+
+<!-- res_bb2 <- as.data.frame(result_bb2[,1:4]) -->
+
+<!-- colnames(res_bb2) <- c("point","sd","point_L","sd_L") -->
+<!-- res_bb2 <- res_bb2 %>% -->
+<!--   mutate( -->
+<!--     ci_low    = point - 1.96*sd, -->
+<!--     ci_high   = point + 1.96*sd, -->
+<!--     ci_low_L  = point_L - 1.96*sd_L, -->
+<!--     ci_high_L = point_L + 1.96*sd_L -->
+<!--   ) %>% -->
+<!--   mutate( -->
+<!--     contain   = ifelse(ci_low < 1 & 1 < ci_high, 1, 0), -->
+<!--     contain_L = ifelse(ci_low_L < 1 & 1 < ci_high_L, 1, 0) -->
+<!--   ) %>% -->
+<!--   select( -->
+<!--     ci_low,ci_high,ci_low_L,ci_high_L,contain,contain_L -->
+<!--   ) -->
+
+<!-- table_bb2 <- tibble( -->
+<!--   noL <- c(sum(res_bb2$contain)/nrow(res_bb2)), -->
+<!--   L <- c(sum(res_bb2$contain_L)/nrow(res_bb2)) -->
+<!--   ) -->
+
+
+
+<!-- knitr::kable(table_bb2, -->
+<!--              format = "pipe", -->
+<!--              digits = 3, -->
+<!--              col.names = c("Coverage Rate","Coverage Rate Condition on L"), -->
+<!--              caption = "Result For Binary Outcome to Binary Exposure" -->
+<!--              ) -->
+<!-- ``` -->
