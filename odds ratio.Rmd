@@ -651,8 +651,8 @@ df_cb_rf_L2 <- df_cb_rf_L2 %>%
   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
 
 table_cb_rf2 <- tibble(
-  noL <- c(sum(df_cb_rf$contain)/nrow(df_cb_rf)),
-  L <- c(sum(df_cb_rf_L$contain)/nrow(df_cb_rf_L))
+  noL <- c(sum(df_cb_rf2$contain)/nrow(df_cb_rf2)),
+  L <- c(sum(df_cb_rf_L2$contain)/nrow(df_cb_rf_L2))
   )
 
 knitr::kable(table_cb_rf2,
