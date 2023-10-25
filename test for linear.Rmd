@@ -442,10 +442,11 @@ result_cb_L <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf_L <- matrix(ncol = 3,nrow = nsample)
 for (i in 1:nsample) {
+  set.seed(i)
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(1+exp(-Z))
-  Y.true <- 2*Z - rnorm(n)
+  pr <- 1/(0.5+exp(0.4*Z))
+  Y.true <- 2*Z + rnorm(n)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
     L = L.true,
@@ -511,7 +512,7 @@ df_cb_rf_L <- df_cb_rf_L %>%
 table_cb_rf <- tibble(
   term <- c("Coverage Rate","Mean"),
   noL <- c(sum(df_cb_rf$contain)/nrow(df_cb_rf),round(mean(df_cb_rf$point),2)),
-  L <- c(sum(df_cb_rf_L$contain)/nrow(df_cb_rf_L),round(mean(df_cb_rf$point),2))
+  L <- c(sum(df_cb_rf_L$contain)/nrow(df_cb_rf_L),round(mean(df_cb_rf_L$point),2))
   )
 
 knitr::kable(table_cb_rf,
@@ -776,7 +777,7 @@ knitr::kable(table_cc,
              digits = 3,
              col.names = c("Metric","No L","With L"),
              caption = "Result For Continuous Outcome to Continuous Exposure(M-estimation)"
-             ) 
+             )
 
 df_cc_rf <- as.data.frame(result_cc_rf)
 colnames(df_cc_rf) <- c("point","ci_low","ci_high")
@@ -799,9 +800,9 @@ knitr::kable(table_cc_rf,
              digits = 3,
              col.names = c("Metric","No L","With L"),
              caption = "Result For Continuous Outcome to Continuous Exposure(MLE)"
-             ) 
+             )
 
-p2_1_1 <- df_cc %>% 
+p2_1_1 <- df_cc %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -811,7 +812,7 @@ p2_1_1 <- df_cc %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))
 
-p2_1_2 <- df_cc_L %>% 
+p2_1_2 <- df_cc_L %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -819,10 +820,10 @@ p2_1_2 <- df_cc_L %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-p2_1_3 <- df_cc_rf %>% 
-  filter(point<2) %>% 
+p2_1_3 <- df_cc_rf %>%
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -830,10 +831,10 @@ p2_1_3 <- df_cc_rf %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))    
+  theme(plot.title = element_text(hjust = 0.5))
 
 p2_1_4 <- df_cc_rf_L %>%
-  filter(point<2) %>% 
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -841,7 +842,7 @@ p2_1_4 <- df_cc_rf_L %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
 (p2_1_1+p2_1_2)/(p2_1_3+p2_1_4)
 ```
@@ -991,57 +992,141 @@ p2_1_4 <- df_cc_rf_L %>%
 # (p2_2_1+p2_2_2)/(p2_2_3+p2_2_4)
 ```
 
+
 ## (3) outcome: binary, exposure: continuous
+
+### Linear Relationship
+
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-# t1 <- Sys.time()
-# result_bc <- matrix(ncol = 3,nrow = nsample)
-# result_bc_L <- matrix(ncol = 3,nrow = nsample)
-# for (i in 1:nsample) {
-#   L.true <- rbinom(n,1,0.5) ## L.true <- bcind(L.true,rep(0,N))
-#   Z <- 0.5 + 0.5*L.true
-#   pr <- 1/(1+exp(-Z))
-#   Y.true <- 2*Z - rnorm(n)
-#   A.true <- rbinom(n,1,pr)
-#   dat <- tibble(
-#     L = L.true,
-#     Y = Y.true,
-#     A = A.true
-#   )
-#   # summary(glm(Y~A+L,data=dat))
-#   # summary(glm(Y~A,data=dat))
-#   L <- tibble(L = dat$L)
-#   res_bc <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
-#   result_bc[i,1] <- exp(res_bc[1])
-#   result_bc[i,2] <- exp(res_bc[1]-1.96*res_bc[2])
-#   result_bc[i,3] <- exp(res_bc[1]+1.96*res_bc[2])
-#   res_bc_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
-#   result_bc_L[i,1] <- exp(res_bc_L[1])
-#   result_bc_L[i,2] <- exp(res_bc_L[1]-1.96*res_bc_L[2])
-#   result_bc_L[i,3] <- exp(res_bc_L[1]+1.96*res_bc_L[2])
-# }
-# t2 <- Sys.time()
-# 
-# df_bc <- as.data.frame(result_bc)
-# colnames(df_bc) <- c("point","ci_low","ci_high")
-# df_bc <- df_bc %>%
-#   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
-# 
-# df_bc_L <- as.data.frame(result_bc_L)
-# colnames(df_bc_L) <- c("point","ci_low","ci_high")
-# df_bc_L <- df_bc_L %>%
-#   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
-# 
-# table_bc <- tibble(
-#   noL <- c(sum(df_bc$contain)/nrow(df_bc)),
-#   L <- c(sum(df_bc_L$contain)/nrow(df_bc_L))
-#   )
-# 
-# knitr::kable(table_bc,
-#              format = "pipe",
-#              digits = 3,
-#              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
-#              caption = "Result For Binary Outcome to Continous Exposure"
-#              ) 
+t1 <- Sys.time()
+result_bc <- matrix(ncol = 3,nrow = nsample)
+result_bc_L <- matrix(ncol = 3,nrow = nsample)
+result_bc_rf <- matrix(ncol = 3,nrow = nsample)
+result_bc_rf_L <- matrix(ncol = 3,nrow = nsample)
+for (i in 1:nsample) {
+  set.seed(i)
+  L.true <- rbinom(n,1,0.5) ## L.true <- bcind(L.true,rep(0,N))
+  Z <- 0.5 + 0.5*L.true
+  pr <- 1/(0.5+exp(0.4*Z))
+  Y.true <- rbinom(n,1,pr)
+  A.true <- 2*Z - rnorm(n)
+  dat <- tibble(
+    L = L.true,
+    Y = Y.true,
+    A = A.true
+  )
+  # summary(glm(Y~A+L,data=dat))
+  # summary(glm(Y~A,data=dat))
+  L <- tibble(L = dat$L)
+  # linear
+  res_bc <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_bc[i,1] <- exp(res_bc[1])
+  result_bc[i,2] <- exp(res_bc[1]-1.96*res_bc[2])
+  result_bc[i,3] <- exp(res_bc[1]+1.96*res_bc[2])
+  res_bc_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_bc_L[i,1] <- exp(res_bc_L[1])
+  result_bc_L[i,2] <- exp(res_bc_L[1]-1.96*res_bc_L[2])
+  result_bc_L[i,3] <- exp(res_bc_L[1]+1.96*res_bc_L[2])
+  # random forest
+  res_bc_rf <- as.numeric(broom::tidy(glm(Y~A,data=dat,family = binomial))[2,c(2,3)])
+  result_bc_rf[i,1] <- exp(res_bc_rf[1])
+  result_bc_rf[i,2] <- exp(res_bc_rf[1]-1.96*res_bc_rf[2])
+  result_bc_rf[i,3] <- exp(res_bc_rf[1]+1.96*res_bc_rf[2])
+  res_bc_rf_L <- as.numeric(broom::tidy(glm(Y~A+L,data=dat,family = binomial))[2,c(2,3)])
+  result_bc_rf_L[i,1] <- exp(res_bc_rf_L[1])
+  result_bc_rf_L[i,2] <- exp(res_bc_rf_L[1]-1.96*res_bc_rf_L[2])
+  result_bc_rf_L[i,3] <- exp(res_bc_rf_L[1]+1.96*res_bc_rf_L[2])
+}
+t2 <- Sys.time()
+df_bc <- as.data.frame(result_bc)
+colnames(df_bc) <- c("point","ci_low","ci_high")
+df_bc <- df_bc %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_bc_L <- as.data.frame(result_bc_L)
+colnames(df_bc_L) <- c("point","ci_low","ci_high")
+df_bc_L <- df_bc_L %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_bc <- tibble(
+  term <- c("Coverage Rate","Mean"),
+  noL <- c(sum(df_bc$contain)/nrow(df_bc),round(mean(df_bc$point),2)),
+  L <- c(sum(df_bc_L$contain)/nrow(df_bc_L),round(mean(df_bc_L$point),2))
+  )
+
+knitr::kable(table_bc,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Metric","No L","With L"),
+             caption = "Result For Binary Outcome to Continous Exposure(M-estimation)"
+             ) 
+
+df_bc_rf <- as.data.frame(result_bc_rf)
+colnames(df_bc_rf) <- c("point","ci_low","ci_high")
+df_bc_rf <- df_bc_rf %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_bc_rf_L <- as.data.frame(result_bc_rf_L)
+colnames(df_bc_rf_L) <- c("point","ci_low","ci_high")
+df_bc_rf_L <- df_bc_rf_L %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_bc_rf <- tibble(
+  term <- c("Coverage Rate","Mean"),
+  noL <- c(sum(df_bc_rf$contain)/nrow(df_bc_rf),round(mean(df_bc_rf$point),2)),
+  L <- c(sum(df_bc_rf_L$contain)/nrow(df_bc_rf_L),round(mean(df_bc_rf_L$point),2))
+  )
+
+knitr::kable(table_bc_rf,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Metric","No L","With L"),
+             caption = "Result For Binary Outcome to Continuous Exposure(MLE)"
+             ) 
+
+p3_1_1 <- df_bc %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (M-estimation without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+p3_1_2 <- df_bc_L %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (M-estimation with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))   
+
+p3_1_3 <- df_bc_rf %>% 
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (MLE without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))    
+
+p3_1_4 <- df_bc_rf_L %>%
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (MLE with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))    
+
+(p3_1_1+p3_1_2)/(p3_1_3+p3_1_4)
 ```
 
 ## (4) outcome: binary, exposure: binary
@@ -1108,7 +1193,7 @@ knitr::kable(table_bb,
              digits = 3,
              col.names = c("Metric","No L","With L"),
              caption = "Result For Binary Outcome to Binary Exposure(M-estimation)"
-             ) 
+             )
 
 df_bb_rf <- as.data.frame(result_bb_rf)
 colnames(df_bb_rf) <- c("point","ci_low","ci_high")
@@ -1131,9 +1216,9 @@ knitr::kable(table_bb_rf,
              digits = 3,
              col.names = c("Metric","No L","With L"),
              caption = "Result For Binary Outcome to Binary Exposure(MLE)"
-             ) 
+             )
 
-p4_1_1 <- df_bb %>% 
+p4_1_1 <- df_bb %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1143,7 +1228,7 @@ p4_1_1 <- df_bb %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))
 
-p4_1_2 <- df_bb_L %>% 
+p4_1_2 <- df_bb_L %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1151,10 +1236,10 @@ p4_1_2 <- df_bb_L %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-p4_1_3 <- df_bb_rf %>% 
-  filter(point<2) %>% 
+p4_1_3 <- df_bb_rf %>%
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1162,10 +1247,10 @@ p4_1_3 <- df_bb_rf %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))    
+  theme(plot.title = element_text(hjust = 0.5))
 
 p4_1_4 <- df_bb_rf_L %>%
-  filter(point<2) %>% 
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1173,7 +1258,7 @@ p4_1_4 <- df_bb_rf_L %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5)) 
+  theme(plot.title = element_text(hjust = 0.5))
 
 (p4_1_1+p4_1_2)/(p4_1_3+p4_1_4)
 ```
