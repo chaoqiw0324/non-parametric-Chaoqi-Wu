@@ -1,7 +1,7 @@
 ---
-title: "odds ratio test"
+title: "test for linear with random forest"
 author: "Daniel Malinsky and Chaoqi Wu"
-date: "2023-09-15"
+date: "2023-11-16"
 output:
   html_document:
     df_print: paged
@@ -36,6 +36,7 @@ library(ranger)
 library(randomForest)
 library(lubridate)
 library(patchwork)
+library(grf)
 ```
 
 # Estimation Function
@@ -246,7 +247,7 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
       dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
       
       outcome <- ranger(fm_out, 
-                        num.trees = 100,
+                        num.trees = 1000,
                         mtry = mtry,
                         min.node.size = 25,
                         data = dat_out,
@@ -263,7 +264,7 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
       dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
 
       exposure <- ranger(fm_exp, 
-                         num.trees = 100,
+                         num.trees = 1000,
                          mtry = mtry,
                          min.node.size = 25,
                          data = dat,
@@ -288,7 +289,7 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
       }
       if (root == "uni") {
         U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
-        est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter=1000, onm = onm, enm = enm, d.diff=d.diff)
+        est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter=1000, onm = onm[,2], enm = enm[,2], d.diff=d.diff)
         res <-  est$root
       }else if(root == "multi"){
         proc <- rootSolve::multiroot(f = estimating_equation,     
@@ -425,7 +426,7 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
 ```
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE, root = "uni"){
+psi.hat_grf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE, root = "uni"){
   ## Function: estimate the odds ratio parameter psi
   ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
   ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
@@ -434,18 +435,27 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
   ## Todo: generalize estimating eq to arbitrary dimensions
   
   if (length(L) == 0) {
-    fm_out <- "Y ~ A"
-    fm_out <- as.formula(fm_out)
-    fm_exp <- "A ~ Y"
-    fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
-    dat <- data.frame(Y,A)
+  #   fm_out <- "Y ~ A"
+  #   fm_out <- as.formula(fm_out)
+  #   fm_exp <- "A ~ Y"
+  #   fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
+  #   dat <- data.frame(Y,A)
+    X_exp <- data.frame(Y)
+    Y_exp <- data.frame(A)
+    X_out <- data.frame(A)
+    Y_out <- data.frame(Y)
+    
   }else{
-    covnames <- colnames(L)
-    fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
-    fm_out <- as.formula(fm_out)
-    fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
-    fm_exp <- as.formula(fm_exp)
-    dat <- data.frame(Y,A,L)
+    # covnames <- colnames(L)
+    # fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
+    # fm_out <- as.formula(fm_out)
+    # fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
+    # fm_exp <- as.formula(fm_exp)
+    # dat <- data.frame(Y,A,L)
+    X_exp <- data.frame(Y, L)
+    Y_exp <- data.frame(A)
+    X_out <- data.frame(A, L)
+    Y_out <- data.frame(Y)
     
   }
   
@@ -464,40 +474,37 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
     
     if(out.bin && exp.bin){
       h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
-      dat1 <- dat
-      dat2 <- dat
-      
       # outcome 
       ## outcome tune parameter 
 
-      dat_out <- dat
-      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
+      X_out_new <- X_out
+      Y_out1 <- Y_out
+      Y_out1$Y <- factor(Y_out1$Y,levels = c(0,1),labels = c("neg","pos"))
       
-      outcome <- ranger(fm_out, 
-                        num.trees = 100,
-                        mtry = mtry,
-                        min.node.size = 25,
-                        data = dat_out,
-                        probability = TRUE)
-      dat1$A <- 0 ## setting A=0
-      onm <- predict(outcome, data=dat1,type="response")$prediction
+      outcome <- probability_forest(X_out,
+                                    Y_out1$Y,
+                                    num.trees = 1000,
+                                    mtry = mtry,
+                                    min.node.size = 25)
+      X_out_new$A <- 0 ## setting A=0
+      onm <- predict(outcome, newdata=X_out_new)$prediction[,2]
       # onm <- predict(outcome, data=dat1,type="prob")[,2]
       onm[Y==0] <- 1-onm[Y==0]
       
       # exposure 
       # exposure tune parameter
 
-      dat_exp <- dat
-      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+      X_exp_new <- X_exp
+      Y_exp1 <- Y_exp
+      Y_exp1$A <- factor(Y_exp1$A,levels = c(0,1),labels = c("neg","pos"))
 
-      exposure <- ranger(fm_exp, 
-                         num.trees = 100,
-                         mtry = mtry,
-                         min.node.size = 25,
-                         data = dat,
-                         probability = TRUE)
-      dat2$Y <- 0 ## setting Y=0
-      enm <- predict(exposure, data=dat2,type="response")$predictions
+      exposure <- probability_forest(X_exp,
+                                     Y_exp1$A,
+                                     num.trees = 1000,
+                                     mtry = mtry,
+                                     min.node.size = 25)
+      X_exp_new$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, newdata = X_exp_new)$predictions[,2]
       # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
       enm[A==0] <- 1-enm[A==0]
     
@@ -549,63 +556,60 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
     # at least one variable is non-bianry  
   
     if(!out.bin){
-
       
-      outcome <- ranger(fm_out, 
-                        num.trees = 1000,
-                        min.node.size = 25,
-                        mtry = mtry,
-                        data = dat)
-      dat1 <- dat
-      dat1$A <- 0 
+      X_out_new <- X_out
+      outcome <- regression_forest(X_out,
+                                   Y_out$Y,
+                                   num.trees = 1000,
+                                   min.node.size = 25,
+                                   mtry = mtry)
+      X_out_new$A <- 0 
       # onm <- predict(outcome, data=dat1,type="response")$prediction
-      onm <- predict(outcome, data=dat1,type="response")$predictions
-      onm[Y==0] <- 1-onm[Y==0]
+      onm <- predict(outcome, newdata = X_out_new)$predictions
+      onm[Y == 0] <- 1 - onm[Y == 0]
     }else{
-      dat1 <- dat
-      dat_out <- dat
-      dat_out$Y <- factor(dat_out$Y,levels = c(0,1),labels = c("neg","pos"))
       
-      outcome <- ranger(fm_out, 
-                        num.trees = 1000,
-                        min.node.size = 25,
-                        mtry = mtry,
-                        data = dat_out,
-                        probability = TRUE)
-      dat1$A <- 0 ## setting A=0
-      onm <- predict(outcome, data=dat1,type="response")$prediction
+      X_out_new <- X_out
+      Y_out1 <- Y_out
+      Y_out1$Y <- factor(Y_out1$Y,levels = c(0,1),labels = c("neg","pos"))
+      
+      outcome <- probability_forest(X_out,
+                                    Y_out1$Y,
+                                    num.trees = 1000,
+                                    min.node.size = 25,
+                                    mtry = mtry)
+      X_out_new$A <- 0 ## setting A=0
+      onm <- predict(outcome, newdata = X_out_new)$predictions[,2]
       # onm <- predict(outcome, data=dat1,type="prob")[,2]
-      onm[Y==0] <- 1-onm[Y==0]
+      onm[Y == 0] <- 1 - onm[Y == 0]
     }
 
   
     if(!exp.bin){
-
-      exposure <- ranger(fm_exp, 
-                          num.trees = 1000,
-                         min.node.size = 25,
-                          mtry = mtry,
-                          data = dat)
-      dat2 <- dat
-      dat2$Y <- 0 ## setting Y=0
+      X_exp_new <- X_exp
+      
+      exposure <- regression_forest(X_exp,
+                                    Y_exp$A,
+                                    num.trees = 1000,
+                                    min.node.size = 25)
+      X_exp_new$Y <- 0 ## setting Y=0
       # enm <- predict(exposure, data=dat2,type="response")$predictions
-      enm <- predict(exposure, data=dat2,type="response")$predictions
-      enm[A==0] <- 1-enm[A==0]
+      enm <- predict(exposure, newdata = X_exp_new)$predictions
+      enm[A == 0] <- 1 - enm[A == 0]
     }else{
-      dat_exp <- dat
-      dat_exp$A <- factor(dat_exp$A,levels = c(0,1),labels = c("neg","pos"))
+      X_exp_new <- X_exp
+      Y_exp1 <- Y_exp
+      Y_exp1$A <- factor(Y_exp1$A,levels = c(0,1),labels = c("neg","pos"))
 
-      exposure <- ranger(fm_exp, 
-                         num.trees = 1000,
-                         min.node.size = 25,
-                         mtry = mtry,
-                         data = dat,
-                         probability = TRUE)
-      dat2 <- dat
-      dat2$Y <- 0 ## setting Y=0
-      enm <- predict(exposure, data=dat2,type="response")$predictions
+      exposure <- probability_forest(X_exp,
+                                     Y_exp1$A,
+                                     num.trees = 1000,
+                                     min.node.size = 25,
+                                     mtry = mtry)
+      X_exp_new$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, newdata=X_exp_new)$predictions[,2]
       # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
-      enm[A==0] <- 1-enm[A==0]
+      enm[A == 0] <- 1 - enm[A == 0]
     }
   
     # build estimate function
@@ -652,10 +656,11 @@ psi.hat_rf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FAL
 }
 ```
 
+
 # Function Test
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-n <- 10000
+n <- 5000
 nsample <- 1000
 ```
 
@@ -664,16 +669,18 @@ nsample <- 1000
 ### Linear Relationship
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_cb <- matrix(ncol = 3,nrow = nsample)
 result_cb_L <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf_L <- matrix(ncol = 3,nrow = nsample)
+result_cb_grf <- matrix(ncol = 3,nrow = nsample)
+result_cb_grf_L <- matrix(ncol = 3,nrow = nsample)
 for (i in 1:nsample) {
+  set.seed(i)
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(1+exp(-Z))
-  Y.true <- 2*Z - rnorm(n)
+  pr <- 1/(0.5+exp(0.4*Z))
+  Y.true <- 2*Z + rnorm(n)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
     L = L.true,
@@ -684,25 +691,34 @@ for (i in 1:nsample) {
   # summary(glm(Y~A,data=dat))
   L <- tibble(L = dat$L)
   # linear
-  res_cb <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb <- psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb[i,1] <- exp(res_cb[1])
   result_cb[i,2] <- exp(res_cb[1]-1.96*res_cb[2])
   result_cb[i,3] <- exp(res_cb[1]+1.96*res_cb[2])
-  res_cb_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_L <- psi.hat_linear(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_L[i,1] <- exp(res_cb_L[1])
   result_cb_L[i,2] <- exp(res_cb_L[1]-1.96*res_cb_L[2])
   result_cb_L[i,3] <- exp(res_cb_L[1]+1.96*res_cb_L[2])
   # random forest
-  res_cb_rf <- psi.hat_rf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_rf <- psi.hat_rf(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_rf[i,1] <- exp(res_cb_rf[1])
   result_cb_rf[i,2] <- exp(res_cb_rf[1]-1.96*res_cb_rf[2])
   result_cb_rf[i,3] <- exp(res_cb_rf[1]+1.96*res_cb_rf[2])
-  res_cb_rf_L <- psi.hat_rf(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_rf_L <- psi.hat_rf(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_rf_L[i,1] <- exp(res_cb_rf_L[1])
   result_cb_rf_L[i,2] <- exp(res_cb_rf_L[1]-1.96*res_cb_rf_L[2])
   result_cb_rf_L[i,3] <- exp(res_cb_rf_L[1]+1.96*res_cb_rf_L[2])
+  # generalized random forest
+  res_cb_grf <- psi.hat_grf(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_cb_grf[i,1] <- exp(res_cb_grf[1])
+  result_cb_grf[i,2] <- exp(res_cb_grf[1]-1.96*res_cb_grf[2])
+  result_cb_grf[i,3] <- exp(res_cb_grf[1]+1.96*res_cb_grf[2])
+  res_cb_grf_L <- psi.hat_grf(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_cb_grf_L[i,1] <- exp(res_cb_grf_L[1])
+  result_cb_grf_L[i,2] <- exp(res_cb_grf_L[1]-1.96*res_cb_grf_L[2])
+  result_cb_grf_L[i,3] <- exp(res_cb_grf_L[1]+1.96*res_cb_grf_L[2])
 }
-t2 <- Sys.time()
+
 df_cb <- as.data.frame(result_cb)
 colnames(df_cb) <- c("point","ci_low","ci_high")
 df_cb <- df_cb %>%
@@ -747,6 +763,28 @@ knitr::kable(table_cb_rf,
              caption = "Result For Continuous Outcome to Binary Exposure(Random Forest)"
              ) 
 
+df_cb_grf <- as.data.frame(result_cb_grf)
+colnames(df_cb_grf) <- c("point","ci_low","ci_high")
+df_cb_grf <- df_cb_grf %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_cb_grf_L <- as.data.frame(result_cb_grf_L)
+colnames(df_cb_grf_L) <- c("point","ci_low","ci_high")
+df_cb_grf_L <- df_cb_grf_L %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_cb_grf <- tibble(
+  noL <- c(sum(df_cb_grf$contain)/nrow(df_cb_grf)),
+  L <- c(sum(df_cb_grf_L$contain)/nrow(df_cb_grf_L))
+  )
+
+knitr::kable(table_cb_grf,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Binary Exposure(Generalized Random Forest)"
+             ) 
+
 p1_1_1 <- df_cb %>% 
   ggplot(aes(x=point)) +
   geom_histogram()+
@@ -787,18 +825,44 @@ p1_1_4 <- df_cb_rf_L %>%
     x = "Value",
     y = "Frequency",
   )+
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+p1_1_5 <- df_cb_grf %>% 
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
   theme(plot.title = element_text(hjust = 0.5))    
 
-(p1_1_1+p1_1_2)/(p1_1_3+p1_1_4)
+p1_1_6 <- df_cb_grf_L %>%
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+(p1_1_1+p1_1_2)/(p1_1_3+p1_1_4)/(p1_1_5+p1_1_6)
 ```
 
 ### Non-linear Relationship
+
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
 result_cb2 <- matrix(ncol = 3,nrow = nsample)
 result_cb_L2 <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf2 <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf_L2 <- matrix(ncol = 3,nrow = nsample)
+result_cb_grf2 <- matrix(ncol = 3,nrow = nsample)
+result_cb_grf_L2 <- matrix(ncol = 3,nrow = nsample)
 for (i in 1:nsample) {
+  set.seed(i)
   L1 <- runif(n,0,1)
   L2 <- runif(n,0,1)
   L3 <- runif(n,0,1)
@@ -806,18 +870,19 @@ for (i in 1:nsample) {
     L1 = L1,
     L2 = L2,
     L3 = L3)
-  L_vec <- L_vec %>% 
+  L_vec <- L_vec %>%
     mutate(
       length = (L1^2 + L2^2 + L3^2)^0.5,
       L1 = L1/length,
       L2 = L2/length,
       L3 = L3/length
-      ) %>% 
+      ) %>%
     select(-length)
   L.true <- 2*L1 + L2^2 + L1*L3
+  # L.true <- 2*L1 + 3*L2 + 4*L3
   Z <- 0.5 + 0.5*L.true
   pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
-  Y.true <- 2*Z - rnorm(n)
+  Y.true <- 3*Z + rnorm(n,0,0.9)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
     Y = Y.true,
@@ -827,25 +892,34 @@ for (i in 1:nsample) {
   # summary(glm(Y~A,data=dat))
   L <- tibble(L = dat$L)
   # linear
-  res_cb <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb <- psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb2[i,1] <- exp(res_cb[1])
   result_cb2[i,2] <- exp(res_cb[1]-1.96*res_cb[2])
   result_cb2[i,3] <- exp(res_cb[1]+1.96*res_cb[2])
-  res_cb_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_L <- psi.hat_linear(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_L2[i,1] <- exp(res_cb_L[1])
   result_cb_L2[i,2] <- exp(res_cb_L[1]-1.96*res_cb_L[2])
   result_cb_L2[i,3] <- exp(res_cb_L[1]+1.96*res_cb_L[2])
   # random forest
-  res_cb_rf <- psi.hat_rf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_rf <- psi.hat_rf(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_rf2[i,1] <- exp(res_cb_rf[1])
   result_cb_rf2[i,2] <- exp(res_cb_rf[1]-1.96*res_cb_rf[2])
   result_cb_rf2[i,3] <- exp(res_cb_rf[1]+1.96*res_cb_rf[2])
-  res_cb_rf_L <- psi.hat_rf(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_cb_rf_L <- psi.hat_rf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
   result_cb_rf_L2[i,1] <- exp(res_cb_rf_L[1])
   result_cb_rf_L2[i,2] <- exp(res_cb_rf_L[1]-1.96*res_cb_rf_L[2])
   result_cb_rf_L2[i,3] <- exp(res_cb_rf_L[1]+1.96*res_cb_rf_L[2])
+  # generalized random forest
+  res_cb_grf <- psi.hat_grf(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_cb_grf2[i,1] <- exp(res_cb_grf[1])
+  result_cb_grf2[i,2] <- exp(res_cb_grf[1]-1.96*res_cb_grf[2])
+  result_cb_grf2[i,3] <- exp(res_cb_grf[1]+1.96*res_cb_grf[2])
+  res_cb_grf_L <- psi.hat_grf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_cb_grf_L2[i,1] <- exp(res_cb_grf_L[1])
+  result_cb_grf_L2[i,2] <- exp(res_cb_grf_L[1]-1.96*res_cb_grf_L[2])
+  result_cb_grf_L2[i,3] <- exp(res_cb_grf_L[1]+1.96*res_cb_grf_L[2])
 }
-t2 <- Sys.time()
+
 df_cb2 <- as.data.frame(result_cb2)
 colnames(df_cb2) <- c("point","ci_low","ci_high")
 df_cb2 <- df_cb2 %>%
@@ -866,7 +940,7 @@ knitr::kable(table_cb2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Binary Exposure(GLM)"
-             ) 
+             )
 
 df_cb_rf2 <- as.data.frame(result_cb_rf2)
 colnames(df_cb_rf2) <- c("point","ci_low","ci_high")
@@ -888,10 +962,31 @@ knitr::kable(table_cb_rf2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Binary Exposure(Random Forest)"
-             ) 
+             )
 
+df_cb_grf2 <- as.data.frame(result_cb_grf2)
+colnames(df_cb_grf2) <- c("point","ci_low","ci_high")
+df_cb_grf2 <- df_cb_grf2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
 
-p1_2_1 <- df_cb2 %>% 
+df_cb_grf_L2 <- as.data.frame(result_cb_grf_L2)
+colnames(df_cb_grf_L2) <- c("point","ci_low","ci_high")
+df_cb_grf_L2 <- df_cb_grf_L2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_cb_grf2 <- tibble(
+  noL <- c(sum(df_cb_grf2$contain)/nrow(df_cb_grf2)),
+  L <- c(sum(df_cb_grf_L2$contain)/nrow(df_cb_grf_L2))
+  )
+
+knitr::kable(table_cb_grf2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Binary Exposure(Generalized Random Forest)"
+             )
+
+p1_2_1 <- df_cb2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -901,7 +996,7 @@ p1_2_1 <- df_cb2 %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))
 
-p1_2_2 <- df_cb_L2 %>% 
+p1_2_2 <- df_cb_L2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -909,10 +1004,10 @@ p1_2_2 <- df_cb_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-p1_2_3 <- df_cb_rf2 %>% 
-  filter(point<2) %>% 
+p1_2_3 <- df_cb_rf2 %>%
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -920,10 +1015,10 @@ p1_2_3 <- df_cb_rf2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))    
+  theme(plot.title = element_text(hjust = 0.5))
 
 p1_2_4 <- df_cb_rf_L2 %>%
-  filter(point<2) %>% 
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -931,9 +1026,31 @@ p1_2_4 <- df_cb_rf_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-(p1_2_1+p1_2_2)/(p1_2_3+p1_2_4)
+p1_2_5 <- df_cb_grf2 %>%
+  filter(point<2) %>%
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+p1_2_6 <- df_cb_grf_L2 %>%
+  filter(point<2) %>%
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+(p1_2_1+p1_2_2)/(p1_2_3+p1_2_4)/(p1_2_5+p1_2_6)
 ```
 
 
@@ -942,16 +1059,23 @@ p1_2_4 <- df_cb_rf_L2 %>%
 ### Linear Relationship
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_cc <- matrix(ncol = 3,nrow = nsample)
 result_cc_L <- matrix(ncol = 3,nrow = nsample)
 result_cc_rf <- matrix(ncol = 3,nrow = nsample)
 result_cc_rf_L <- matrix(ncol = 3,nrow = nsample)
+result_cc_grf <- matrix(ncol = 3,nrow = nsample)
+result_cc_grf_L <- matrix(ncol = 3,nrow = nsample)
+# result_cc2       <- result_cc      
+# result_cc_L2     <- result_cc_L    
+# result_cc_rf2    <- result_cc_rf   
+# result_cc_rf_L2  <- result_cc_rf_L 
+# result_cc_grf2   <- result_cc_grf  
+# result_cc_grf_L2 <- result_cc_grf_L
 for (i in 1:nsample) {
   L.true <- rnorm(n,0,1) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
-  Y.true <- 5*Z + rnorm(n)
-  A.true <- -4*Z + rnorm(n)
+  Y.true <- 2*Z + rnorm(n,0,1.25)
+  A.true <- -2*Z + rnorm(n,0,1.25)
   dat <- tibble(
     L = L.true,
     Y = Y.true,
@@ -965,7 +1089,7 @@ for (i in 1:nsample) {
   result_cc[i,1] <- exp(res_cc[1])
   result_cc[i,2] <- exp(res_cc[1]-1.96*res_cc[2])
   result_cc[i,3] <- exp(res_cc[1]+1.96*res_cc[2])
-  res_cc_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  res_cc_L <- psi.hat_linear(Y = dat$Y, A = dat$A, L=L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
   result_cc_L[i,1] <- exp(res_cc_L[1])
   result_cc_L[i,2] <- exp(res_cc_L[1]-1.96*res_cc_L[2])
   result_cc_L[i,3] <- exp(res_cc_L[1]+1.96*res_cc_L[2])
@@ -974,12 +1098,20 @@ for (i in 1:nsample) {
   result_cc_rf[i,1] <- exp(res_cc_rf[1])
   result_cc_rf[i,2] <- exp(res_cc_rf[1]-1.96*res_cc_rf[2])
   result_cc_rf[i,3] <- exp(res_cc_rf[1]+1.96*res_cc_rf[2])
-  res_cc_rf_L <- psi.hat_rf(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  res_cc_rf_L <- psi.hat_rf(Y = dat$Y, A = dat$A, L=L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
   result_cc_rf_L[i,1] <- exp(res_cc_rf_L[1])
   result_cc_rf_L[i,2] <- exp(res_cc_rf_L[1]-1.96*res_cc_rf_L[2])
   result_cc_rf_L[i,3] <- exp(res_cc_rf_L[1]+1.96*res_cc_rf_L[2])
+  # generalized random forest
+  res_cc_grf <- psi.hat_grf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_cc_grf[i,1] <- exp(res_cc_grf[1])
+  result_cc_grf[i,2] <- exp(res_cc_grf[1]-1.96*res_cc_grf[2])
+  result_cc_grf[i,3] <- exp(res_cc_grf[1]+1.96*res_cc_grf[2])
+  res_cc_grf_L <- psi.hat_grf(Y = dat$Y, A = dat$A, L=L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_cc_grf_L[i,1] <- exp(res_cc_grf_L[1])
+  result_cc_grf_L[i,2] <- exp(res_cc_grf_L[1]-1.96*res_cc_grf_L[2])
+  result_cc_grf_L[i,3] <- exp(res_cc_grf_L[1]+1.96*res_cc_grf_L[2])
 }
-t2 <- Sys.time()
 
 df_cc <- as.data.frame(result_cc)
 colnames(df_cc) <- c("point","ci_low","ci_high")
@@ -1025,6 +1157,28 @@ knitr::kable(table_cc_rf,
              caption = "Result For Continuous Outcome to Continuous Exposure(Random Forest)"
              ) 
 
+df_cc_grf <- as.data.frame(result_cc_grf)
+colnames(df_cc_grf) <- c("point","ci_low","ci_high")
+df_cc_grf <- df_cc_grf %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_cc_grf_L <- as.data.frame(result_cc_grf_L)
+colnames(df_cc_grf_L) <- c("point","ci_low","ci_high")
+df_cc_grf_L <- df_cc_grf_L %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_cc_grf <- tibble(
+  noL <- c(sum(df_cc_grf$contain)/nrow(df_cc_grf)),
+  L <- c(sum(df_cc_grf_L$contain)/nrow(df_cc_grf_L))
+  )
+
+knitr::kable(table_cc_grf,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Continuous Exposure(Generalized Random Forest)"
+             ) 
+
 p2_1_1 <- df_cc %>% 
   ggplot(aes(x=point)) +
   geom_histogram()+
@@ -1067,18 +1221,42 @@ p2_1_4 <- df_cc_rf_L %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))   
 
-(p2_1_1+p2_1_2)/(p2_1_3+p2_1_4)
+p2_1_5 <- df_cc_grf %>% 
+  filter(point < 2) %>% 
+  ggplot(aes(x = point)) +
+  geom_histogram() +
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))    
+
+p2_1_6 <- df_cc_grf_L %>%
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))   
+
+(p2_1_1+p2_1_2)/(p2_1_3+p2_1_4)/(p2_1_5+p2_1_6)
 ```
 
 ### Non-linear Relationship
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_cc2 <- matrix(ncol = 3,nrow = nsample)
 result_cc_L2 <- matrix(ncol = 3,nrow = nsample)
 result_cc_rf2 <- matrix(ncol = 3,nrow = nsample)
 result_cc_rf_L2 <- matrix(ncol = 3,nrow = nsample)
+result_cc_grf2 <- matrix(ncol = 3,nrow = nsample)
+result_cc_grf_L2 <- matrix(ncol = 3,nrow = nsample)
 for (i in 1:nsample) {
+  set.seed(i)
   L1 <- runif(n,0,1)
   L2 <- runif(n,0,1)
   L3 <- runif(n,0,1)
@@ -1086,18 +1264,19 @@ for (i in 1:nsample) {
     L1 = L1,
     L2 = L2,
     L3 = L3)
-  L_vec <- L_vec %>% 
+  L_vec <- L_vec %>%
     mutate(
       length = (L1^2 + L2^2 + L3^2)^0.5,
       L1 = L1/length,
       L2 = L2/length,
       L3 = L3/length
-      ) %>% 
+      ) %>%
     select(-length)
   L.true <- 2*L1 + L2^2 + L1*L3
+  # L.true <- 2*L1 + 3*L2 + 4*L3
   Z <- 0.5 + 0.5*L.true
-  Y.true <- 5*Z + rnorm(n)
-  A.true <- -4*Z + rnorm(n)
+  Y.true <- 4*Z + rnorm(n,0,1)
+  A.true <- -4*Z + rnorm(n,0,1)
   dat <- tibble(
     Y = Y.true,
     A = A.true
@@ -1110,7 +1289,7 @@ for (i in 1:nsample) {
   result_cc2[i,1] <- exp(res_cc[1])
   result_cc2[i,2] <- exp(res_cc[1]-1.96*res_cc[2])
   result_cc2[i,3] <- exp(res_cc[1]+1.96*res_cc[2])
-  res_cc_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  res_cc_L <- psi.hat_linear(Y = dat$Y, A = dat$A, L=L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
   result_cc_L2[i,1] <- exp(res_cc_L[1])
   result_cc_L2[i,2] <- exp(res_cc_L[1]-1.96*res_cc_L[2])
   result_cc_L2[i,3] <- exp(res_cc_L[1]+1.96*res_cc_L[2])
@@ -1119,12 +1298,20 @@ for (i in 1:nsample) {
   result_cc_rf2[i,1] <- exp(res_cc_rf[1])
   result_cc_rf2[i,2] <- exp(res_cc_rf[1]-1.96*res_cc_rf[2])
   result_cc_rf2[i,3] <- exp(res_cc_rf[1]+1.96*res_cc_rf[2])
-  res_cc_rf_L <- psi.hat_rf(dat$Y,dat$A,L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  res_cc_rf_L <- psi.hat_rf(Y = dat$Y, A = dat$A, L=L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
   result_cc_rf_L2[i,1] <- exp(res_cc_rf_L[1])
   result_cc_rf_L2[i,2] <- exp(res_cc_rf_L[1]-1.96*res_cc_rf_L[2])
   result_cc_rf_L2[i,3] <- exp(res_cc_rf_L[1]+1.96*res_cc_rf_L[2])
+  # generalized random forest
+  res_cc_grf <- psi.hat_grf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_cc_grf2[i,1] <- exp(res_cc_grf[1])
+  result_cc_grf2[i,2] <- exp(res_cc_grf[1]-1.96*res_cc_grf[2])
+  result_cc_grf2[i,3] <- exp(res_cc_grf[1]+1.96*res_cc_grf[2])
+  res_cc_grf_L <- psi.hat_grf(Y = dat$Y, A = dat$A, L=L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+  result_cc_grf_L2[i,1] <- exp(res_cc_grf_L[1])
+  result_cc_grf_L2[i,2] <- exp(res_cc_grf_L[1]-1.96*res_cc_grf_L[2])
+  result_cc_grf_L2[i,3] <- exp(res_cc_grf_L[1]+1.96*res_cc_grf_L[2])
 }
-t2 <- Sys.time()
 
 df_cc2 <- as.data.frame(result_cc2)
 colnames(df_cc2) <- c("point","ci_low","ci_high")
@@ -1146,7 +1333,7 @@ knitr::kable(table_cc2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Continuous Exposure(GLM)"
-             ) 
+             )
 
 df_cc_rf2 <- as.data.frame(result_cc_rf2)
 colnames(df_cc_rf2) <- c("point","ci_low","ci_high")
@@ -1168,9 +1355,31 @@ knitr::kable(table_cc_rf2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Continuous Outcome to Continuous Exposure(Random Forest)"
-             ) 
+             )
 
-p2_2_1 <- df_cc2 %>% 
+df_cc_grf2 <- as.data.frame(result_cc_grf2)
+colnames(df_cc_grf2) <- c("point","ci_low","ci_high")
+df_cc_grf2 <- df_cc_grf2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_cc_grf_L2 <- as.data.frame(result_cc_grf_L2)
+colnames(df_cc_grf_L2) <- c("point","ci_low","ci_high")
+df_cc_grf_L2 <- df_cc_grf_L2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_cc_grf2 <- tibble(
+  noL <- c(sum(df_cc_grf2$contain)/nrow(df_cc_grf2)),
+  L <- c(sum(df_cc_grf_L2$contain)/nrow(df_cc_grf_L2))
+  )
+
+knitr::kable(table_cc_grf2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Continuous Outcome to Continuous Exposure(Generalized Random Forest)"
+             )
+
+p2_2_1 <- df_cc2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1180,7 +1389,7 @@ p2_2_1 <- df_cc2 %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))
 
-p2_2_2 <- df_cc_L2 %>% 
+p2_2_2 <- df_cc_L2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1188,10 +1397,10 @@ p2_2_2 <- df_cc_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-p2_2_3 <- df_cc_rf2 %>% 
-  filter(point<2) %>% 
+p2_2_3 <- df_cc_rf2 %>%
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1199,10 +1408,10 @@ p2_2_3 <- df_cc_rf2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))    
+  theme(plot.title = element_text(hjust = 0.5))
 
 p2_2_4 <- df_cc_rf_L2 %>%
-  filter(point<2) %>% 
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1210,22 +1419,52 @@ p2_2_4 <- df_cc_rf_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5)) 
+  theme(plot.title = element_text(hjust = 0.5))
 
-(p2_2_1+p2_2_2)/(p2_2_3+p2_2_4)
+p2_2_5 <- df_cc_grf2 %>%
+  filter(point < 2) %>%
+  ggplot(aes(x = point)) +
+  geom_histogram() +
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+p2_2_6 <- df_cc_grf_L2 %>%
+  filter(point<2) %>%
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+(p2_2_1+p2_2_2)/(p2_2_3+p2_2_4)/(p2_2_5+p2_2_6)
 ```
 
+
 ## (3) outcome: binary, exposure: continuous
+
+<!-- ### Linear Relationship -->
+
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-# t1 <- Sys.time()
 # result_bc <- matrix(ncol = 3,nrow = nsample)
 # result_bc_L <- matrix(ncol = 3,nrow = nsample)
+# result_bc_rf <- matrix(ncol = 3,nrow = nsample)
+# result_bc_rf_L <- matrix(ncol = 3,nrow = nsample)
+# result_bc_grf <- matrix(ncol = 3,nrow = nsample)
+# result_bc_grf_L <- matrix(ncol = 3,nrow = nsample)
 # for (i in 1:nsample) {
+#   set.seed(i)
 #   L.true <- rbinom(n,1,0.5) ## L.true <- bcind(L.true,rep(0,N))
 #   Z <- 0.5 + 0.5*L.true
-#   pr <- 1/(1+exp(-Z))
-#   Y.true <- 2*Z - rnorm(n)
-#   A.true <- rbinom(n,1,pr)
+#   pr <- 1/(0.5+exp(0.4*Z))
+#   Y.true <- rbinom(n,1,pr)
+#   A.true <- 2*Z - rnorm(n)
 #   dat <- tibble(
 #     L = L.true,
 #     Y = Y.true,
@@ -1234,16 +1473,34 @@ p2_2_4 <- df_cc_rf_L2 %>%
 #   # summary(glm(Y~A+L,data=dat))
 #   # summary(glm(Y~A,data=dat))
 #   L <- tibble(L = dat$L)
-#   res_bc <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+#   # linear
+#   res_bc <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
 #   result_bc[i,1] <- exp(res_bc[1])
 #   result_bc[i,2] <- exp(res_bc[1]-1.96*res_bc[2])
 #   result_bc[i,3] <- exp(res_bc[1]+1.96*res_bc[2])
-#   res_bc_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+#   res_bc_L <- psi.hat_linear(Y = dat$Y, A = dat$A, L = L, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
 #   result_bc_L[i,1] <- exp(res_bc_L[1])
 #   result_bc_L[i,2] <- exp(res_bc_L[1]-1.96*res_bc_L[2])
 #   result_bc_L[i,3] <- exp(res_bc_L[1]+1.96*res_bc_L[2])
+#   # random forest
+#   res_bc_rf <- psi.hat_rf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+#   result_bc_rf[i,1] <- exp(res_bc_rf[1])
+#   result_bc_rf[i,2] <- exp(res_bc_rf[1]-1.96*res_bc_rf[2])
+#   result_bc_rf[i,3] <- exp(res_bc_rf[1]+1.96*res_bc_rf[2])
+#   res_bc_rf_L <- psi.hat_rf(Y = dat$Y, A = dat$A, L = L, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+#   result_bc_rf_L[i,1] <- exp(res_bc_rf_L[1])
+#   result_bc_rf_L[i,2] <- exp(res_bc_rf_L[1]-1.96*res_bc_rf_L[2])
+#   result_bc_rf_L[i,3] <- exp(res_bc_rf_L[1]+1.96*res_bc_rf_L[2])
+#   # generalized random forest
+#   res_bc_grf <- psi.hat_grf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+#   result_bc_grf[i,1] <- exp(res_bc_grf[1])
+#   result_bc_grf[i,2] <- exp(res_bc_grf[1]-1.96*res_bc_grf[2])
+#   result_bc_grf[i,3] <- exp(res_bc_grf[1]+1.96*res_bc_grf[2])
+#   res_bc_grf_L <- psi.hat_grf(Y = dat$Y, A = dat$A, L = L, subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = TRUE)
+#   result_bc_grf_L[i,1] <- exp(res_bc_grf_L[1])
+#   result_bc_grf_L[i,2] <- exp(res_bc_grf_L[1]-1.96*res_bc_grf_L[2])
+#   result_bc_grf_L[i,3] <- exp(res_bc_grf_L[1]+1.96*res_bc_grf_L[2])
 # }
-# t2 <- Sys.time()
 # 
 # df_bc <- as.data.frame(result_bc)
 # colnames(df_bc) <- c("point","ci_low","ci_high")
@@ -1256,31 +1513,103 @@ p2_2_4 <- df_cc_rf_L2 %>%
 #   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
 # 
 # table_bc <- tibble(
-#   noL <- c(sum(df_bc$contain)/nrow(df_bc)),
-#   L <- c(sum(df_bc_L$contain)/nrow(df_bc_L))
+#   term <- c("Coverage Rate","Mean"),
+#   noL <- c(sum(df_bc$contain)/nrow(df_bc),round(mean(df_bc$point),2)),
+#   L <- c(sum(df_bc_L$contain)/nrow(df_bc_L),round(mean(df_bc_L$point),2))
 #   )
 # 
 # knitr::kable(table_bc,
 #              format = "pipe",
 #              digits = 3,
-#              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
-#              caption = "Result For Binary Outcome to Continous Exposure"
+#              col.names = c("Metric","No L","With L"),
+#              caption = "Result For Binary Outcome to Continous Exposure(M-estimation)"
 #              ) 
+# 
+# df_bc_rf <- as.data.frame(result_bc_rf)
+# colnames(df_bc_rf) <- c("point","ci_low","ci_high")
+# df_bc_rf <- df_bc_rf %>%
+#   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+# 
+# df_bc_rf_L <- as.data.frame(result_bc_rf_L)
+# colnames(df_bc_rf_L) <- c("point","ci_low","ci_high")
+# df_bc_rf_L <- df_bc_rf_L %>%
+#   mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+# 
+# table_bc_rf <- tibble(
+#   term <- c("Coverage Rate","Mean"),
+#   noL <- c(sum(df_bc_rf$contain)/nrow(df_bc_rf),round(mean(df_bc_rf$point),2)),
+#   L <- c(sum(df_bc_rf_L$contain)/nrow(df_bc_rf_L),round(mean(df_bc_rf_L$point),2))
+#   )
+# 
+# knitr::kable(table_bc_rf,
+#              format = "pipe",
+#              digits = 3,
+#              col.names = c("Metric","No L","With L"),
+#              caption = "Result For Binary Outcome to Continuous Exposure(MLE)"
+#              ) 
+# 
+# p3_1_1 <- df_bc %>% 
+#   ggplot(aes(x=point)) +
+#   geom_histogram()+
+#   labs(
+#     title = "Distribution of Point Estimate (M-estimation without L)",
+#     x = "Value",
+#     y = "Frequency",
+#   )+
+#   theme(plot.title = element_text(hjust = 0.5))
+# 
+# p3_1_2 <- df_bc_L %>% 
+#   ggplot(aes(x=point)) +
+#   geom_histogram()+
+#   labs(
+#     title = "Distribution of Point Estimate (M-estimation with L)",
+#     x = "Value",
+#     y = "Frequency",
+#   )+
+#   theme(plot.title = element_text(hjust = 0.5))   
+# 
+# p3_1_3 <- df_bc_rf %>% 
+#   filter(point<2) %>% 
+#   ggplot(aes(x=point)) +
+#   geom_histogram()+
+#   labs(
+#     title = "Distribution of Point Estimate (MLE without L)",
+#     x = "Value",
+#     y = "Frequency",
+#   )+
+#   theme(plot.title = element_text(hjust = 0.5))    
+# 
+# p3_1_4 <- df_bc_rf_L %>%
+#   filter(point<2) %>% 
+#   ggplot(aes(x=point)) +
+#   geom_histogram()+
+#   labs(
+#     title = "Distribution of Point Estimate (MLE with L)",
+#     x = "Value",
+#     y = "Frequency",
+#   )+
+#   theme(plot.title = element_text(hjust = 0.5))    
+# 
+# (p3_1_1+p3_1_2)/(p3_1_3+p3_1_4)
 ```
 
 ## (4) outcome: binary, exposure: binary
 
 ### Linear Relationship
+
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_bb <- matrix(ncol = 3,nrow = nsample)
 result_bb_L <- matrix(ncol = 3,nrow = nsample)
 result_bb_rf <- matrix(ncol = 3,nrow = nsample)
 result_bb_rf_L <- matrix(ncol = 3,nrow = nsample)
+result_bb_grf <- matrix(ncol = 3,nrow = nsample)
+result_bb_grf_L <- matrix(ncol = 3,nrow = nsample)
+
 for (i in 1:nsample) {
   L.true <- rbinom(n,1,0.5) ## L.true <- cbind(L.true,rep(0,N))
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(0.5+exp(0.4*Z))
+  pr <- 1/(0.75+exp(0.45*Z))
+  summary(pr)
   Y.true <- rbinom(n,1,pr)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
@@ -1295,7 +1624,7 @@ for (i in 1:nsample) {
   result_bb[i,1] <- exp(res_bb[1])
   result_bb[i,2] <- exp(res_bb[1]-1.96*res_bb[2])
   result_bb[i,3] <- exp(res_bb[1]+1.96*res_bb[2])
-  res_bb_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_bb_L <- psi.hat_linear(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb_L[i,1] <- exp(res_bb_L[1])
   result_bb_L[i,2] <- exp(res_bb_L[1]-1.96*res_bb_L[2])
   result_bb_L[i,3] <- exp(res_bb_L[1]+1.96*res_bb_L[2])
@@ -1304,12 +1633,20 @@ for (i in 1:nsample) {
   result_bb_rf[i,1] <- exp(res_bb_rf[1])
   result_bb_rf[i,2] <- exp(res_bb_rf[1]-1.96*res_bb_rf[2])
   result_bb_rf[i,3] <- exp(res_bb_rf[1]+1.96*res_bb_rf[2])
-  res_bb_rf_L <- psi.hat_rf(dat$Y,dat$A,L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  res_bb_rf_L <- psi.hat_rf(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb_rf_L[i,1] <- exp(res_bb_rf_L[1])
   result_bb_rf_L[i,2] <- exp(res_bb_rf_L[1]-1.96*res_bb_rf_L[2])
   result_bb_rf_L[i,3] <- exp(res_bb_rf_L[1]+1.96*res_bb_rf_L[2])
+  # generalized random forest
+  res_bb_grf <- psi.hat_grf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_bb_grf[i,1] <- exp(res_bb_grf[1])
+  result_bb_grf[i,2] <- exp(res_bb_grf[1]-1.96*res_bb_grf[2])
+  result_bb_grf[i,3] <- exp(res_bb_grf[1]+1.96*res_bb_grf[2])
+  res_bb_grf_L <- psi.hat_grf(Y = dat$Y,A = dat$A,L = L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_bb_grf_L[i,1] <- exp(res_bb_grf_L[1])
+  result_bb_grf_L[i,2] <- exp(res_bb_grf_L[1]-1.96*res_bb_grf_L[2])
+  result_bb_grf_L[i,3] <- exp(res_bb_grf_L[1]+1.96*res_bb_grf_L[2])
 }
-t2 <- Sys.time()
 
 df_bb <- as.data.frame(result_bb)
 colnames(df_bb) <- c("point","ci_low","ci_high")
@@ -1355,6 +1692,28 @@ knitr::kable(table_bb_rf,
              caption = "Result For Binary Outcome to Binary Exposure(Random Forest)"
              ) 
 
+df_bb_grf <- as.data.frame(result_bb_grf)
+colnames(df_bb_grf) <- c("point","ci_low","ci_high")
+df_bb_grf <- df_bb_grf %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_bb_grf_L <- as.data.frame(result_bb_grf_L)
+colnames(df_bb_grf_L) <- c("point","ci_low","ci_high")
+df_bb_grf_L <- df_bb_grf_L %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_bb_grf <- tibble(
+  noL <- c(sum(df_bb_grf$contain)/nrow(df_bb_grf)),
+  L <- c(sum(df_bb_grf_L$contain)/nrow(df_bb_grf_L))
+  )
+
+knitr::kable(table_bb_grf,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Binary Exposure(Generalized Random Forest)"
+             ) 
+
 p4_1_1 <- df_bb %>% 
   ggplot(aes(x=point)) +
   geom_histogram()+
@@ -1397,17 +1756,43 @@ p4_1_4 <- df_bb_rf_L %>%
   )+
   theme(plot.title = element_text(hjust = 0.5)) 
 
-(p4_1_1+p4_1_2)/(p4_1_3+p4_1_4)
+
+
+p4_1_5 <- df_bb_grf %>% 
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))    
+
+p4_1_6 <- df_bb_grf_L %>%
+  filter(point<2) %>% 
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+(p4_1_1+p4_1_2)/(p4_1_3+p4_1_4)/(p4_1_5+p4_1_6)
 ```
 
 ### Non-linear Relationship
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_bb2 <- matrix(ncol = 3,nrow = nsample)
 result_bb_L2 <- matrix(ncol = 3,nrow = nsample)
 result_bb_rf2 <- matrix(ncol = 3,nrow = nsample)
 result_bb_rf_L2 <- matrix(ncol = 3,nrow = nsample)
+result_bb_grf2 <- matrix(ncol = 3,nrow = nsample)
+result_bb_grf_L2 <- matrix(ncol = 3,nrow = nsample)
+
 for (i in 1:nsample) {
   L1 <- runif(n,0,1)
   L2 <- runif(n,0,1)
@@ -1426,7 +1811,7 @@ for (i in 1:nsample) {
     select(-length)
   L.true <- 2*L1 + L2^2 + L1*L3
   Z <- 0.5 + 0.5*L.true
-  pr <- 1/(1+3.5*exp(-Z)) # control the probability close to 0.5
+  pr <- 1/(0.45+exp(0.35*Z))
   Y.true <- rbinom(n,1,pr)
   A.true <- rbinom(n,1,pr)
   dat <- tibble(
@@ -1436,25 +1821,33 @@ for (i in 1:nsample) {
   # summary(glm(Y~A+L,data=dat))
   # summary(glm(Y~A,data=dat))
   L <- tibble(L = dat$L)
-  res_bb <- psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE,root = "multi")
+  res_bb <- psi.hat_linear(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb2[i,1] <- exp(res_bb[1])
-  result_bb2[i,2] <- exp(res_bb[1] - 1.96*res_bb[2])
-  result_bb2[i,3] <- exp(res_bb[1] + 1.96*res_bb[2])
-  res_bb_L <- psi.hat_linear(dat$Y,dat$A,L, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE,root = "multi")
+  result_bb2[i,2] <- exp(res_bb[1]-1.96*res_bb[2])
+  result_bb2[i,3] <- exp(res_bb[1]+1.96*res_bb[2])
+  res_bb_L <- psi.hat_linear(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb_L2[i,1] <- exp(res_bb_L[1])
-  result_bb_L2[i,2] <- exp(res_bb_L[1] - 1.96*res_bb_L[2])
-  result_bb_L2[i,3] <- exp(res_bb_L[1] + 1.96*res_bb_L[2])
+  result_bb_L2[i,2] <- exp(res_bb_L[1]-1.96*res_bb_L[2])
+  result_bb_L2[i,3] <- exp(res_bb_L[1]+1.96*res_bb_L[2])
   #random forest
-  res_bb_rf <- psi.hat_rf(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE,root = "multi")
+  res_bb_rf <- psi.hat_rf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb_rf2[i,1] <- exp(res_bb_rf[1])
-  result_bb_rf2[i,2] <- exp(res_bb_rf[1] - 1.96*res_bb_rf[2])
-  result_bb_rf2[i,3] <- exp(res_bb_rf[1] + 1.96*res_bb_rf[2])
-  res_bb_rf_L <- psi.hat_rf(dat$Y,dat$A,L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE,root = "multi")
+  result_bb_rf2[i,2] <- exp(res_bb_rf[1]-1.96*res_bb_rf[2])
+  result_bb_rf2[i,3] <- exp(res_bb_rf[1]+1.96*res_bb_rf[2])
+  res_bb_rf_L <- psi.hat_rf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
   result_bb_rf_L2[i,1] <- exp(res_bb_rf_L[1])
   result_bb_rf_L2[i,2] <- exp(res_bb_rf_L[1]-1.96*res_bb_rf_L[2])
   result_bb_rf_L2[i,3] <- exp(res_bb_rf_L[1]+1.96*res_bb_rf_L[2])
+  # generalized random forest
+  res_bb_grf <- psi.hat_grf(Y=dat$Y,A=dat$A,L=c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_bb_grf2[i,1] <- exp(res_bb_grf[1])
+  result_bb_grf2[i,2] <- exp(res_bb_grf[1]-1.96*res_bb_grf[2])
+  result_bb_grf2[i,3] <- exp(res_bb_grf[1]+1.96*res_bb_grf[2])
+  res_bb_grf_L <- psi.hat_grf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+  result_bb_grf_L2[i,1] <- exp(res_bb_grf_L[1])
+  result_bb_grf_L2[i,2] <- exp(res_bb_grf_L[1]-1.96*res_bb_grf_L[2])
+  result_bb_grf_L2[i,3] <- exp(res_bb_grf_L[1]+1.96*res_bb_grf_L[2])
 }
-t2 <- Sys.time()
 
 df_bb2 <- as.data.frame(result_bb2)
 colnames(df_bb2) <- c("point","ci_low","ci_high")
@@ -1476,7 +1869,7 @@ knitr::kable(table_bb2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Binary Outcome to Binary Exposure(GLM)"
-             ) 
+             )
 
 df_bb_rf2 <- as.data.frame(result_bb_rf2)
 colnames(df_bb_rf2) <- c("point","ci_low","ci_high")
@@ -1498,9 +1891,31 @@ knitr::kable(table_bb_rf2,
              digits = 3,
              col.names = c("Coverage Rate","Coverage Rate Condition on L"),
              caption = "Result For Binary Outcome to Binary Exposure(Random Forest)"
-             ) 
+             )
 
-p4_2_1 <- df_bb2 %>% 
+df_bb_grf2 <- as.data.frame(result_bb_grf2)
+colnames(df_bb_grf2) <- c("point","ci_low","ci_high")
+df_bb_grf2 <- df_bb_grf2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+df_bb_grf_L2 <- as.data.frame(result_bb_grf_L2)
+colnames(df_bb_grf_L2) <- c("point","ci_low","ci_high")
+df_bb_grf_L2 <- df_bb_grf_L2 %>%
+  mutate(contain=ifelse(ci_low < 1 & 1 < ci_high, 1, 0))
+
+table_bb_grf2 <- tibble(
+  noL <- c(sum(df_bb_grf2$contain)/nrow(df_bb_grf2)),
+  L <- c(sum(df_bb_grf_L2$contain)/nrow(df_bb_grf_L2))
+  )
+
+knitr::kable(table_bb_grf2,
+             format = "pipe",
+             digits = 3,
+             col.names = c("Coverage Rate","Coverage Rate Condition on L"),
+             caption = "Result For Binary Outcome to Binary Exposure(Generalized Random Forest)"
+             )
+
+p4_2_1 <- df_bb2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1510,7 +1925,7 @@ p4_2_1 <- df_bb2 %>%
   )+
   theme(plot.title = element_text(hjust = 0.5))
 
-p4_2_2 <- df_bb_L2 %>% 
+p4_2_2 <- df_bb_L2 %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1518,10 +1933,10 @@ p4_2_2 <- df_bb_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-p4_2_3 <- df_bb_rf2 %>% 
-  filter(point<2) %>% 
+p4_2_3 <- df_bb_rf2 %>%
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1529,10 +1944,10 @@ p4_2_3 <- df_bb_rf2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))    
+  theme(plot.title = element_text(hjust = 0.5))
 
 p4_2_4 <- df_bb_rf_L2 %>%
-  filter(point<2) %>% 
+  filter(point<2) %>%
   ggplot(aes(x=point)) +
   geom_histogram()+
   labs(
@@ -1540,9 +1955,33 @@ p4_2_4 <- df_bb_rf_L2 %>%
     x = "Value",
     y = "Frequency",
   )+
-  theme(plot.title = element_text(hjust = 0.5))   
+  theme(plot.title = element_text(hjust = 0.5))
 
-(p4_2_1+p4_2_2)/(p4_2_3+p4_2_4)
+
+
+p4_2_5 <- df_bb_grf2 %>%
+  filter(point<2) %>%
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest without L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+p4_2_6 <- df_bb_grf_L2 %>%
+  filter(point<2) %>%
+  ggplot(aes(x=point)) +
+  geom_histogram()+
+  labs(
+    title = "Distribution of Point Estimate (Generalized Random Forest with L)",
+    x = "Value",
+    y = "Frequency",
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+(p4_2_1+p4_2_2)/(p4_2_3+p4_2_4)/(p4_2_5+p4_2_6)
 ```
 
 

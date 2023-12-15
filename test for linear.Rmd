@@ -436,7 +436,6 @@ nsample <- 1000
 ### Linear Relationship
 
 ```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
-t1 <- Sys.time()
 result_cb <- matrix(ncol = 3,nrow = nsample)
 result_cb_L <- matrix(ncol = 3,nrow = nsample)
 result_cb_rf <- matrix(ncol = 3,nrow = nsample)
@@ -475,7 +474,7 @@ for (i in 1:nsample) {
   result_cb_rf_L[i,2] <- exp(res_cb_rf_L[1]-1.96*res_cb_rf_L[2])
   result_cb_rf_L[i,3] <- exp(res_cb_rf_L[1]+1.96*res_cb_rf_L[2])
 }
-t2 <- Sys.time()
+
 df_cb <- as.data.frame(result_cb)
 colnames(df_cb) <- c("point","ci_low","ci_high")
 df_cb <- df_cb %>%
