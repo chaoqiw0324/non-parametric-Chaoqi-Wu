@@ -1,0 +1,565 @@
+---
+title: "test_independence_function"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(rje)
+library(tidyverse)
+# library(arules)
+library(caret)
+library(BB)
+library(ggplot2)
+library(ranger)
+library(randomForest)
+library(lubridate)
+library(patchwork)
+library(grf)
+```
+
+# p value function
+
+```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
+psi.hat_linear <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE, root = "uni"){
+  ## Function: estimate the odds ratio parameter psi
+  ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
+  ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
+  ## Output: A real number (vector) psi.hat, an estimate of the conditional odds ratio parameter psi
+  
+  ## Todo: generalize estimating eq to arbitrary dimensions
+  
+  if(length(L)==0){
+    fm_out <- "Y ~ A"
+    fm_out <- as.formula(fm_out)
+    fm_exp <- "A ~ Y"
+    fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
+    dat <- data.frame(Y,A)
+  }else{
+    covnames <- colnames(L)
+    fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
+    fm_out <- as.formula(fm_out)
+    fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
+    fm_exp <- as.formula(fm_exp)
+    dat <- data.frame(Y,A,L)
+  }
+  
+  
+  if(!is.null(subset)) Y <- Y[subset]
+  if(!is.null(subset)) A <- A[subset,]
+  if(!is.null(subset)) L <- L[subset,]
+  #temp
+  
+  
+  refA <- 0 
+  refY <- 0
+    
+    if(out.bin && exp.bin){
+      h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
+      dat1 <- dat
+      dat2 <- dat
+      
+      outcome <- glm(fm_out,family=binomial,data = dat)
+      dat1$A <- 0 ## setting A=0
+      onm <- predict.glm(outcome, newdata=dat1,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+      onm[Y==0] <- 1-onm[Y==0]
+    
+      exposure <- glm(fm_exp, family = binomial,data = dat)
+      dat2$Y <- 0 ## setting Y=0
+      enm <- predict.glm(exposure, newdata=dat2,type="response") # may cause warning: prediction from a rank-deficient fit may be misleading
+      enm[A==0] <- 1-enm[A==0]
+    
+      d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
+    
+      # build estimate function
+      estimating_function <- function(psi){
+        estf = d.diff*h.dag / (exp(psi*Y*A)*onm*enm)
+      return(estf) 
+      }
+  
+      estimating_equation <- function(psi){
+        estf = estimating_function(psi)         
+        este = sum(estf)                       
+        return(este)
+      }
+      if (root == "uni") {
+        U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
+        est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter=1000, onm = onm, enm = enm, d.diff=d.diff)
+        res <-  est$root
+      }else if(root == "multi"){
+        proc <- rootSolve::multiroot(f = estimating_equation,     
+                                  start = c(-3.0))
+        res <- proc$root
+      }
+        
+        # Baking the bread (approximate derivative)
+        deriv <- numDeriv::jacobian(func = estimating_equation,   
+                                x = res)              
+        bread <- -1*deriv / n
+        
+        # Cooking the filling (matrix algebra)
+        outerprod <- sum(estimating_function(res) * estimating_function(res)) 
+        # alternative code using matrix algebra
+        # outerprod <- t(estimating_function(mu_root)) %*% estimating_function(mu_root) 
+        filling <- outerprod/n 
+    
+        # Assembling the sandwich (matrix algebra)
+        sandwich <- (bread^-1) %*% filling %*% (bread^-1)
+        se <- as.numeric(sqrt(sandwich / n))
+        
+    result <- c(res,se)
+    return(result)
+    }
+  
+    if(!out.bin){ 
+      outcome <- glm(fm_out, family = gaussian,data = dat)
+    } else outcome <- glm(fm_out, family = binomial,data = dat)
+    dat1 <- dat
+    dat1$A <- 0 ## setting A=0
+    onm <- predict.glm(outcome, newdata=dat1,type="response")
+
+  
+    if(!exp.bin){
+      exposure <- glm(fm_exp, family = gaussian,data = dat)
+    } else exposure <- glm(fm_exp, family = binomial,data = dat)
+    dat2 <- dat
+    dat2$Y <- 0 ## setting Y=0
+    enm <- predict.glm(exposure, newdata=dat2,type="response")
+
+  
+  
+    #U <- function(psi,onm,enm){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+    #est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001, onm = onm, enm = enm)
+    #return(est$root)
+  
+    # build estimate function
+    estimating_function <- function(psi){
+      estf = (Y - onm)*(A - enm)*exp(-psi*Y*A) 
+    return(estf) 
+    }
+
+    estimating_equation <- function(psi){
+      estf = estimating_function(psi)         
+      este = sum(estf)                       
+      return(este)
+    }   
+    
+    if (root == "uni") {
+      U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+      par.init <- c(0)
+      sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
+      res <- sol$par
+      }else if(root == "multi"){
+        proc <- rootSolve::multiroot(f = estimating_equation,     
+                                  start = c(-3.0))
+        res <- proc$root
+      }
+
+    # Baking the bread (approximate derivative)
+    deriv <- numDeriv::jacobian(func = estimating_equation,   
+                            x = res)              
+    bread <- -1*deriv / n
+    
+    # Cooking the filling (matrix algebra)
+    outerprod <- sum(estimating_function(res) * estimating_function(res)) 
+    # alternative code using matrix algebra
+    # outerprod <- t(estimating_function(mu_root)) %*% estimating_function(mu_root) 
+    filling <- outerprod/n 
+
+    # Assembling the sandwich (matrix algebra)
+    sandwich <- (bread^-1) %*% filling %*% (bread^-1)
+    se <- as.numeric(sqrt(sandwich / n))
+    
+    result <- c(res,se)
+    return(result)
+
+}
+```
+
+
+```{r warning=FALSE,message =FALSE,fig.dim = c(10,8)}
+psi.hat_grf <- function(Y, A, L=c(), subset = NULL, out.bin = TRUE, exp.bin = FALSE, exp.scalar = FALSE, root = "uni"){
+  ## Function: estimate the odds ratio parameter psi
+  ## Input: 1. An outcome nuisance model, onm = f(Y|L,A=0)
+  ##        2. An exposure nuisance model, enm = g(A|Y=0,L)
+  ## Output: A real number (vector) psi.hat_ranger, an estimate of the conditional odds ratio parameter psi
+  
+  ## Todo: generalize estimating eq to arbitrary dimensions
+  
+  if (length(L) == 0) {
+  #   fm_out <- "Y ~ A"
+  #   fm_out <- as.formula(fm_out)
+  #   fm_exp <- "A ~ Y"
+  #   fm_exp <- as.formula(fm_exp) ## for cases where conditioning set is empty
+  #   dat <- data.frame(Y,A)
+    X_exp <- data.frame(Y)
+    Y_exp <- data.frame(A)
+    X_out <- data.frame(A)
+    Y_out <- data.frame(Y)
+    
+  }else{
+    # covnames <- colnames(L)
+    # fm_out <- paste0("Y ~ A + ", paste(covnames, collapse = "+"))
+    # fm_out <- as.formula(fm_out)
+    # fm_exp <- paste0("A ~ Y + ", paste(covnames, collapse = "+"))
+    # fm_exp <- as.formula(fm_exp)
+    # dat <- data.frame(Y,A,L)
+    X_exp <- data.frame(Y, L)
+    Y_exp <- data.frame(A)
+    X_out <- data.frame(A, L)
+    Y_out <- data.frame(Y)
+    
+  }
+  
+  
+  if (!is.null(subset)) Y <- Y[subset]
+  if (!is.null(subset)) A <- A[subset,]
+  if (!is.null(subset)) L <- L[subset,]
+  #temp
+  
+  
+  refA <- 0 
+  refY <- 0
+  # parameter for ranger
+  mtry_up <- length(L)+1
+    
+    if(out.bin && exp.bin){
+      h.dag <- 0.25 ## probability f.dag(Y|L) = g.dag(A|L) = 0.5, i.e., Y ~ A ~ Bernoulli(0.5)
+      # outcome 
+      ## outcome tune parameter 
+
+      X_out_new <- X_out
+      Y_out1 <- Y_out
+      Y_out1$Y <- factor(Y_out1$Y,levels = c(0,1),labels = c("neg","pos"))
+      
+      outcome <- probability_forest(X_out,
+                                    Y_out1$Y,
+                                    num.trees = 3000,
+                                    min.node.size = 10)
+      X_out_new$A <- 0 ## setting A=0
+      onm <- predict(outcome, newdata=X_out_new)$prediction[,2]
+      # onm <- predict(outcome, data=dat1,type="prob")[,2]
+      onm[Y==0] <- 1-onm[Y==0]
+      
+      # exposure 
+      # exposure tune parameter
+
+      X_exp_new <- X_exp
+      Y_exp1 <- Y_exp
+      Y_exp1$A <- factor(Y_exp1$A,levels = c(0,1),labels = c("neg","pos"))
+
+      exposure <- probability_forest(X_exp,
+                                     Y_exp1$A,
+                                     num.trees = 3000,
+                                     min.node.size = 10)
+      X_exp_new$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, newdata = X_exp_new)$predictions[,2]
+      # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
+      enm[A==0] <- 1-enm[A==0]
+    
+    
+      d.diff <- (-1)^(Y+A) ## Eric's suggestion, for Y,A binary
+      # build estimate function
+      estimating_function <- function(psi){
+        estf = d.diff*h.dag / (exp(psi*Y*A)*onm*enm)
+      return(estf) 
+      }
+  
+      estimating_equation <- function(psi){
+        estf = estimating_function(psi)         
+        este = sum(estf)                       
+        return(este)
+      }
+      if (root == "uni") {
+        U <- function(psi,onm,enm,d.diff){ sum( d.diff*h.dag / (exp(psi*Y*A)*onm*enm) ) }
+        est <- uniroot(U, interval = c(-3.0, 3.0), extendInt = "yes", tol = 0.001,maxiter=1000, onm = onm, enm = enm, d.diff=d.diff)
+        res <-  est$root
+      }else if(root == "multi"){
+        proc <- rootSolve::multiroot(f = estimating_equation,     
+                                  start = c(-3.0))
+        res <- proc$root
+      }
+        
+        # Baking the bread (approximate derivative)
+        deriv <- numDeriv::jacobian(func = estimating_equation,   
+                                x = res)              
+        bread <- -1*deriv / n
+        
+        # Cooking the filling (matrix algebra)
+        outerprod <- sum(estimating_function(res) * estimating_function(res)) 
+        # alternative code using matrix algebra
+        # outerprod <- t(estimating_function(mu_root)) %*% estimating_function(mu_root) 
+        filling <- outerprod/n 
+    
+        # Assembling the sandwich (matrix algebra)
+        sandwich <- (bread^-1) %*% filling %*% (bread^-1)
+        se <- as.numeric(sqrt(sandwich / n))
+        
+    result <- c(res,se)
+    return(result)
+    }
+  
+  
+  
+  
+    # at least one variable is non-bianry  
+  
+    if(!out.bin){
+      
+      X_out_new <- X_out
+      Y_out$Y1 <- (Y_out$Y-mean(Y_out$Y))/sd(Y_out$Y)
+      outcome <- regression_forest(X_out,
+                                   Y_out$Y1,
+                                   num.trees = 5000,
+                                   min.node.size = 5)
+      X_out_new$A <- 0 ## setting A=0
+      # onm <- predict(outcome, data=dat1,type="response")$prediction
+      onm <- predict(outcome, newdata = X_out_new)$predictions
+      onm <- onm*sd(Y_out$Y)+mean(Y_out$Y)
+    }else{
+      
+      X_out_new <- X_out
+      Y_out1 <- Y_out
+      Y_out1$Y <- factor(Y_out1$Y,levels = c(0,1),labels = c("neg","pos"))
+      
+      outcome <- probability_forest(X_out,
+                                    Y_out1$Y,
+                                    num.trees = 5000,
+                                    min.node.size = 5)
+      X_out_new$A <- 0 ## setting A=0
+      onm <- predict(outcome, newdata = X_out_new)$predictions[,2]
+      # onm <- predict(outcome, data=dat1,type="prob")[,2]
+    }
+
+  
+    if(!exp.bin){
+      X_exp_new <- X_exp
+      Y_exp$A1 <- (Y_exp$A-mean(Y_exp$A))/sd(Y_exp$A)
+      exposure <- regression_forest(X_exp,
+                                    Y_exp$A1,
+                                    num.trees = 5000,
+                                    min.node.size = 5)
+      X_exp_new$Y <- 0 ## setting Y=0
+      # enm <- predict(exposure, data=dat2,type="response")$predictions
+      enm <- predict(exposure, newdata = X_exp_new)$predictions
+      enm <- enm*sd(Y_exp$A)+mean(Y_exp$A)
+    }else{
+      X_exp_new <- X_exp
+      Y_exp1 <- Y_exp
+      Y_exp1$A <- factor(Y_exp1$A,levels = c(0,1),labels = c("neg","pos"))
+
+      exposure <- probability_forest(X_exp,
+                                     Y_exp1$A,
+                                     num.trees = 5+000,
+                                     min.node.size = 5)
+      X_exp_new$Y <- 0 ## setting Y=0
+      enm <- predict(exposure, newdata=X_exp_new)$predictions[,2]
+      # enm <- predict(exposure_train, data=dat2,type="prob")[,2]
+      
+    }
+  
+    # build estimate function
+    estimating_function <- function(psi){
+      estf = (Y - onm)*(A - enm)*exp(-psi*Y*A) 
+    return(estf) 
+    }
+
+    estimating_equation <- function(psi){
+      estf = estimating_function(psi)         
+      este = sum(estf)                       
+      return(este)
+    }   
+    
+    if (root == "uni") {
+      U <- function(psi){ sum( (Y - onm)*(A - enm)*exp(-psi*Y*A) )}
+      par.init <- c(0)
+      sol <- BBsolve(par=par.init, fn=U, quiet=TRUE) 
+      res <- sol$par
+      }else if(root == "multi"){
+        proc <- rootSolve::multiroot(f = estimating_equation, maxiter = 1000,    
+                                  start = c(-3.0))
+        res <- proc$root
+      }
+
+    # Baking the bread (approximate derivative)
+    deriv <- numDeriv::jacobian(func = estimating_equation,   
+                            x = res)              
+    bread <- -1*deriv / n
+    
+    # Cooking the filling (matrix algebra)
+    outerprod <- sum(estimating_function(res) * estimating_function(res)) 
+    # alternative code using matrix algebra
+    # outerprod <- t(estimating_function(mu_root)) %*% estimating_function(mu_root) 
+    filling <- outerprod/n 
+
+    # Assembling the sandwich (matrix algebra)
+    sandwich <- (bread^-1) %*% filling %*% (bread^-1)
+    se <- as.numeric(sqrt(sandwich / n))
+    
+    result <- c(res,se)
+    return(result)
+
+}
+```
+
+```{r}
+all_numeric <- function(df) {
+  all_numeric <- all(sapply(df, is.numeric))
+  return(all_numeric)
+}
+```
+
+
+```{r}
+test_independence <- function(X, Y, Z, alpha = 0.05) {
+  # Check if X and Y are binary or continuous
+  if(! is.numeric(X) | ! is.numeric(Y)){
+    cat("The X and Y must be numeric data")
+  }
+  if(! all_numeric(Z)){
+    cat("The Z must be numeric data or empty")
+  }
+  
+  is_binary_X <- all(X %in% c(0, 1))
+  is_binary_Y <- all(Y %in% c(0, 1))
+  if(is.null(Z)){
+    is_big_Z <- FALSE
+  }else{
+      is_big_Z <- ncol(Z) > 4
+    }
+  # Check if the dimension of Z is big (> 4)
+  
+  
+  if (is_binary_X) {
+    exp_bin = TRUE
+  } else {
+    exp_bin = FALSE
+  }
+  
+  if (is_binary_Y) {
+    out_bin = TRUE
+  } else {
+    out_bin = FALSE
+  }
+  if(out_bin != exp_bin){
+    roots="multi"
+  }else{
+    roots="uni"
+  }
+  if(is_big_Z){
+     res <- psi.hat_grf(Y=Y,A=X,L=Z,subset = NULL,out.bin = out_bin,exp.bin=exp_bin,exp.scalar = FALSE,root=roots)
+  }else{
+    res <- psi.hat_linear(Y=Y,A=X,L=Z,subset = NULL,out.bin = out_bin,exp.bin=exp_bin,exp.scalar = FALSE,root=roots)
+  }
+  # Two-sided p-value
+  estimate <- res[1]
+  sd_estimate <- res[2]
+  Z <- (estimate - 0) / sd_estimate
+  
+  # Calculate two-sided p-value
+  p_value_two_sided <- 2 * pnorm(-abs(Z))
+  
+  # Output
+  return(list(p_value = p_value_two_sided, alpha = alpha, independent = p_value_two_sided > alpha))
+}
+```
+
+# p value test
+
+## (1) outcome: continuous, exposure: binary
+
+```{r}
+L1 <- runif(n,0,1)
+L2 <- runif(n,0,1)
+L3 <- runif(n,0,1)
+L4 <- runif(n,0,1)
+L5 <- runif(n,0,1)
+# L5 <- rep("a",n)
+L_vec <- tibble(
+  L1 = L1,
+  L2 = L2,
+  L3 = L3,
+  L4 = L4,
+  L5 = L5)
+  L.true <- 2*L1 + L2^2 + L1*L3 + 3*L4 + L1 * L5
+# L.true <- 2*L1 + 3*L2 + 4*L3
+Z <- 0.5 + 0.5*L.true
+pr <- 1/(1+8*exp(-Z))
+summary(pr)
+# control the probability close to 0.5
+Y.true <- 2*Z + rnorm(n,0,1)
+A.true <- rbinom(n,1,pr)
+dat <- tibble(
+  Y = Y.true,
+  A = A.true
+) %>% cbind(L_vec)
+psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE,roots="multi")
+psi.hat_grf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = FALSE, exp.bin = TRUE, exp.scalar = TRUE)
+test_independence(X = dat$A,Y=dat$Y,Z=L_vec)
+test_independence(X = dat$A,Y=dat$Y,Z=c())
+```
+
+## (2) outcome: continous, exposure: continous
+
+```{r}
+L1 <- runif(n,0,1)
+L2 <- runif(n,0,1)
+L3 <- runif(n,0,1)
+L4 <- runif(n,0,1)
+L5 <- runif(n,0,1)
+L_vec <- tibble(
+  L1 = L1,
+  L2 = L2,
+  L3 = L3,
+  L4 = L4,
+  L5 = L5)
+L.true <- 2*L1 + L2^2 + L1*L3 + 3*L4 + L1 * L5
+# L.true <- 2*L1 + 3*L2 + 4*L3
+Z <- 0.5 + 0.5*L.true
+Y.true <- 2*Z + rnorm(n,0,3)
+A.true <- 2*Z + rnorm(n,0,3)
+dat <- tibble(
+  Y = Y.true,
+  A = A.true
+) %>% cbind(L_vec)
+
+psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE,root="multi")
+psi.hat_grf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = FALSE, exp.bin = FALSE, exp.scalar = TRUE)
+test_independence(X = dat$A,Y=dat$Y,Z=L_vec)
+test_independence(X = dat$A,Y=dat$Y,Z=c())
+```
+
+## (4) outcome: binary, exposure: binary
+
+
+```{r}
+ L1 <- runif(n,0,1)
+  L2 <- runif(n,0,1)
+  L3 <- runif(n,0,1)
+  L4 <- runif(n,0,1)
+  L5 <- runif(n,0,1)
+  L_vec <- tibble(
+    L1 = L1,
+    L2 = L2,
+    L3 = L3,
+    L4 = L4,
+    L5 = L5)
+  L.true <- 2*L1 + L2^2 + L1*L3 + 3*L4 + L1 * L5
+  Z <- 0.5 + 0.5*L.true
+  pr <- 1/(1+8*exp(-Z))
+  summary(pr)
+  Y.true <- rbinom(n,1,pr)
+  A.true <- rbinom(n,1,pr)
+  dat <- tibble(
+    Y = Y.true,
+    A = A.true
+  ) %>% cbind(L_vec)
+
+psi.hat_linear(Y = dat$Y,A = dat$A,L = c(), subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE,root="multi")
+psi.hat_grf(Y = dat$Y,A = dat$A,L = L_vec, subset = NULL, out.bin = TRUE, exp.bin = TRUE, exp.scalar = TRUE)
+test_independence(X = dat$A,Y=dat$Y,Z=L_vec)
+test_independence(X = dat$A,Y=dat$Y,Z=c())
+```
+
+
